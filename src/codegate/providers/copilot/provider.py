@@ -1,10 +1,12 @@
 import asyncio
 import re
 import ssl
+import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import unquote, urljoin, urlparse
 
+import httptools
 import structlog
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
@@ -36,6 +38,109 @@ HTTP_STATUS_MESSAGES = {
     502: "Bad Gateway",
 }
 
+class RequestState:
+    def __init__(self):
+        self.headers_complete = False
+        self.message_complete = False
+        self.parser = httptools.HttpRequestParser(self)
+        self.headers: Dict[str, str] = {}
+        self.body = bytearray()
+        self.method = None
+        self.url = None
+        self.version = None
+        self.upgrade = False
+        self.content_length = None
+        self.chunked = False
+        self.path = None
+        self.query = None
+        self.id = str(uuid.uuid4())
+        # Add these fields to track chunked data
+        self.chunks_received = []
+        self.current_chunk_size = None
+        self.current_chunk_data = bytearray()
+
+    def on_url(self, url: bytes):
+        self.url = url.decode('utf-8')
+        # Parse URL to get path and query
+        parsed = urlparse(self.url)
+        self.path = parsed.path
+        self.query = parsed.query
+
+    def on_header(self, name: bytes, value: bytes):
+        name = name.decode('utf-8').lower()  # Normalize header names
+        value = value.decode('utf-8')
+        self.headers[name] = value
+
+        # Track important headers
+        if name == 'content-length':
+            self.content_length = int(value)
+        elif name == 'transfer-encoding' and 'chunked' in value.lower():
+            self.chunked = True
+
+    def on_headers_complete(self):
+        self.headers_complete = True
+        self.method = self.parser.get_method().decode('utf-8')
+        self.version = f"HTTP/{self.parser.get_http_version()}"
+        self.upgrade = self.parser.should_upgrade()
+
+    def on_chunk_complete(self):
+        """Called when a chunk is complete"""
+        logger.debug(f"Request ID {self.id} chunk complete")
+        if len(self.current_chunk_data) > 0:  # Skip zero-length chunks
+            self.chunks_received.append(bytes(self.current_chunk_data))
+            self.body.extend(self.current_chunk_data)
+
+    def on_body(self, body: bytes):
+        """Called when body data is received"""
+        if self.chunked:
+            self.current_chunk_data.extend(body)
+        else:
+            self.body.extend(body)
+
+    def on_message_complete(self):
+        logger.debug(f"Request ID {self.id} Message complete")
+        self.message_complete = True
+
+    def feed_data(self, data: bytes) -> bool:
+        logger.debug(f"Feeding data to request parser: {data}")
+        try:
+            self.parser.feed_data(data)
+            return True
+        except httptools.HttpParserUpgrade:
+            self.upgrade = True
+            return True
+        except httptools.HttpParserError as e:
+            logger.error(f"Parser error: {e}")
+            return False
+
+    def is_complete(self) -> bool:
+        """Check if we have received the complete request"""
+        if not self.headers_complete:
+            return False
+
+        # For requests without body
+        if self.method in ('GET', 'HEAD', 'OPTIONS'):
+            logger.debug("Request without body is complete")
+            return True
+
+        # For chunked requests, we need to wait for message_complete
+        if self.chunked:
+            logger.debug(f"Chunked request {self.id} complete status: {self.message_complete}")
+            return self.message_complete
+
+        # For content-length requests
+        if self.content_length is not None:
+            is_complete = len(self.body) >= self.content_length
+            logger.debug(f"Content-Length request complete status: {is_complete} ({len(self.body)}/{self.content_length})")
+            return is_complete
+
+        return False
+
+    def get_request_data(self) -> bytes:
+        """Reconstruct the full HTTP request"""
+        request_line = f"{self.method} {self.url} {self.version}\r\n"
+        headers = "\r\n".join(f"{k}: {v}" for k, v in self.headers.items())
+        return f"{request_line}{headers}\r\n\r\n".encode() + bytes(self.body)
 
 @dataclass
 class HttpRequest:
@@ -128,6 +233,41 @@ def http_request_from_bytes(data: bytes) -> Optional[HttpRequest]:
     )
 
 
+class RobustParser:
+    def __init__(self):
+        self.parser = httptools.HttpRequestParser(self)
+        self.method: Optional[str] = None
+        self.path: Optional[str] = None
+        self.version: Optional[str] = None
+        self.headers: List[str] = []
+        self.original_path: Optional[str] = None
+        self.target: Optional[str] = None
+        self.body = bytearray()
+
+    def on_url(self, url: bytes):
+        self.path = url.decode()
+        self.original_path = self.path
+
+    def on_header(self, name: bytes, value: bytes):
+        self.headers.append(f"{name.decode()}: {value.decode()}")
+
+    def on_headers_complete(self):
+        self.method = self.parser.get_method().decode()
+        self.version = f"HTTP/{self.parser.get_http_version()}"
+
+    def is_protobuf_request(self) -> bool:
+        return any(h.lower().startswith("content-type: application/proto") for h in self.headers)
+
+    def peek_headers(self, data: bytes):
+        if b'\r\n\r\n' not in data:
+            raise ValueError("Incomplete headers")
+
+        # Only parse headers
+        self.parser.feed_data(data[:data.find(b'\r\n\r\n') + 4])
+
+    def feed_data(self, data: bytes):
+        self.parser.feed_data(data)
+
 class CopilotProvider(asyncio.Protocol):
     """Protocol implementation for the Copilot proxy server"""
 
@@ -154,6 +294,8 @@ class CopilotProvider(asyncio.Protocol):
         self.fim_pipeline: Optional[CopilotPipeline] = None
         # the context as provided by the pipeline
         self.context_tracking: Optional[PipelineContext] = None
+
+        self.request_state = RequestState()
 
     def _ensure_pipelines(self):
         if not self.input_pipeline or not self.fim_pipeline:
@@ -337,6 +479,20 @@ class CopilotProvider(asyncio.Protocol):
         Forward data to target if connection is established. In case of shortcut
         response, send a response to the client
         """
+        parser = RobustParser()
+        try:
+            parser.peek_headers(data)
+        except Exception as e:
+            logger.error(f"Error peeking headers: {e}, writing data \n{data}\n directly")
+            self.target_transport.write(data)
+            return
+
+        if parser.is_protobuf_request():
+            logger.info("Protobuf request detected, skipping pipeline processing")
+            if self.target_transport:
+                self.target_transport.write(data)
+                return
+
         pipeline_output = await self._forward_data_through_pipeline(data)
 
         if isinstance(pipeline_output, HttpResponse):
@@ -451,6 +607,11 @@ class CopilotProvider(asyncio.Protocol):
 
             self.buffer.extend(data)
 
+            if not self.request_state.feed_data(data):
+                logger.error("Cannot feed data")
+
+            logger.debug(f"Request ID {self.request_state.id} [{self.request_state.method} {self.request_state.path}] is complete: {self.request_state.is_complete()}")
+
             while self.buffer:  # Process as many complete requests as we have
                 if not self.headers_parsed:
                     self.headers_parsed = self.parse_headers()
@@ -459,6 +620,7 @@ class CopilotProvider(asyncio.Protocol):
                         if self.request.method == "CONNECT":
                             if self._has_complete_body():
                                 self.handle_connect()
+                                self.request_state = RequestState()
                                 self.buffer.clear()  # CONNECT requests are handled differently
                             break  # CONNECT handling complete
                         elif self._has_complete_body():
