@@ -45,6 +45,7 @@ class RequestState:
         self.parser = httptools.HttpRequestParser(self)
         self.headers: Dict[str, str] = {}
         self.body = bytearray()
+        self.buffer = bytearray()
         self.method = None
         self.url = None
         self.version = None
@@ -102,6 +103,11 @@ class RequestState:
         self.message_complete = True
 
     def feed_data(self, data: bytes) -> bool:
+        if len(self.buffer) >= MAX_BUFFER_SIZE:
+            logger.error(f"Request ID {self.id} body too large")
+            raise ValueError("Request body too large")
+        self.buffer.extend(data)
+
         logger.debug(f"Feeding data to request parser: {data}")
         try:
             self.parser.feed_data(data)
@@ -113,13 +119,16 @@ class RequestState:
             logger.error(f"Parser error: {e}")
             return False
 
+    def get_buffer(self) -> bytes:
+        return bytes(self.buffer)
+
     def is_complete(self) -> bool:
         """Check if we have received the complete request"""
         if not self.headers_complete:
             return False
 
         # For requests without body
-        if self.method in ('GET', 'HEAD', 'OPTIONS'):
+        if self.method in ('GET', 'HEAD', 'OPTIONS', 'CONNECT'):
             logger.debug("Request without body is complete")
             return True
 
@@ -611,6 +620,9 @@ class CopilotProvider(asyncio.Protocol):
                 logger.error("Cannot feed data")
 
             logger.debug(f"Request ID {self.request_state.id} [{self.request_state.method} {self.request_state.path}] is complete: {self.request_state.is_complete()}")
+            if not self.request_state.is_complete():
+                logger.debug(f"Request ID {self.request_state.id} is not complete, waiting for more data")
+                return
 
             while self.buffer:  # Process as many complete requests as we have
                 if not self.headers_parsed:
@@ -644,7 +656,7 @@ class CopilotProvider(asyncio.Protocol):
                     break  # Either processing request or need more data
                 else:
                     if self._has_complete_body():
-                        complete_request = bytes(self.buffer)
+                        complete_request = self.request_state.get_buffer()
                         self.buffer.clear()  # Clear buffer for next request
                         asyncio.create_task(self._forward_data_to_target(complete_request))
                     break  # Either processing request or need more data
