@@ -24,6 +24,7 @@ from codegate.providers.copilot.pipeline import (
     CopilotPipeline,
 )
 from codegate.providers.copilot.streaming import SSEProcessor
+from codegate.providers.cursor.cursor import CursorProvider
 
 setup_logging()
 logger = structlog.get_logger("codegate").bind(origin="copilot_proxy")
@@ -89,7 +90,11 @@ class RequestState:
         logger.debug(f"Request ID {self.id} chunk complete")
         if len(self.current_chunk_data) > 0:  # Skip zero-length chunks
             self.chunks_received.append(bytes(self.current_chunk_data))
-            self.body.extend(self.current_chunk_data)
+            logger.debug(f"Request ID {self.id} chunk received: {self.current_chunk_data}")
+            logger.debug(f"Request ID {self.id} total chunks received: {len(self.chunks_received)}")
+            logger.debug(f"Request ID {self.id} total chunked data received: {len(b''.join(self.chunks_received))}")
+            self.current_chunk_data = bytearray() # reset current chunk data
+            #self.body.extend(self.current_chunk_data)
 
     def on_body(self, body: bytes):
         """Called when body data is received"""
@@ -121,6 +126,15 @@ class RequestState:
 
     def get_buffer(self) -> bytes:
         return bytes(self.buffer)
+
+    def is_protobuf_request(self) -> bool:
+        return self.headers.get('content-type', '').startswith('application/proto') or \
+                self.headers.get('content-type', '').startswith('application/connect+proto')
+
+    def get_body(self) -> bytes:
+        if self.chunked:
+            return b''.join(self.chunks_received)
+        return bytes(self.body)
 
     def is_complete(self) -> bool:
         """Check if we have received the complete request"""
@@ -305,6 +319,7 @@ class CopilotProvider(asyncio.Protocol):
         self.context_tracking: Optional[PipelineContext] = None
 
         self.request_state = RequestState()
+        self.cursor_provider = CursorProvider()
 
     def _ensure_pipelines(self):
         if not self.input_pipeline or not self.fim_pipeline:
@@ -488,20 +503,6 @@ class CopilotProvider(asyncio.Protocol):
         Forward data to target if connection is established. In case of shortcut
         response, send a response to the client
         """
-        parser = RobustParser()
-        try:
-            parser.peek_headers(data)
-        except Exception as e:
-            logger.error(f"Error peeking headers: {e}, writing data \n{data}\n directly")
-            self.target_transport.write(data)
-            return
-
-        if parser.is_protobuf_request():
-            logger.info("Protobuf request detected, skipping pipeline processing")
-            if self.target_transport:
-                self.target_transport.write(data)
-                return
-
         pipeline_output = await self._forward_data_through_pipeline(data)
 
         if isinstance(pipeline_output, HttpResponse):
@@ -656,9 +657,18 @@ class CopilotProvider(asyncio.Protocol):
                     break  # Either processing request or need more data
                 else:
                     if self._has_complete_body():
-                        complete_request = self.request_state.get_buffer()
                         self.buffer.clear()  # Clear buffer for next request
-                        asyncio.create_task(self._forward_data_to_target(complete_request))
+
+                        complete_request = self.request_state.get_buffer()
+                        if self.request_state.is_protobuf_request():
+                            logger.debug("Protobuf request detected, skipping pipeline processing")
+                            decoded = self.cursor_provider.decode_by_method(self.request_state.path, self.request_state.get_body())
+                            if decoded:
+                                logger.debug(f"Decoded message: {decoded}")
+                            self.target_transport.write(data)
+                        else:
+                            logger.debug("http request detected, processing through pipeline")
+                            asyncio.create_task(self._forward_data_to_target(complete_request))
                     break  # Either processing request or need more data
 
         except Exception as e:
