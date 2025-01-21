@@ -1,4 +1,5 @@
 import asyncio
+import gzip
 import re
 import ssl
 import uuid
@@ -132,9 +133,23 @@ class RequestState:
                 self.headers.get('content-type', '').startswith('application/connect+proto')
 
     def get_body(self) -> bytes:
-        if self.chunked:
-            return b''.join(self.chunks_received)
-        return bytes(self.body)
+        raw_body = bytes(self.body) if not self.chunked else b''.join(self.chunks_received)
+    
+        content_encoding = self.headers.get('content-encoding', '').lower()
+        if content_encoding == '':
+            return raw_body
+    
+        if 'gzip' in content_encoding:
+            try:
+                decompressed_body = gzip.decompress(raw_body)
+                return decompressed_body
+            except Exception as e:
+                logger.error(f"Error decompressing gzipped body: {e}")
+                return raw_body
+        else:
+            logger.warning(f"Unsupported content encoding: {content_encoding}")
+        
+        return raw_body
 
     def is_complete(self) -> bool:
         """Check if we have received the complete request"""
