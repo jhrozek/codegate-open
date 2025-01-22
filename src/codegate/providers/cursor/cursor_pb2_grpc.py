@@ -6805,12 +6805,23 @@ class FileSyncServiceStub(object):
                 request_serializer=cursor__pb2.FSUploadFileRequest.SerializeToString,
                 response_deserializer=cursor__pb2.FSUploadFileResponse.FromString,
                 _registered_method=True)
+        self.FSIsEnabledForUser = channel.unary_unary(
+                '/aiserver.v1.FileSyncService/FSIsEnabledForUser',
+                request_serializer=cursor__pb2.FSIsEnabledForUserRequest.SerializeToString,
+                response_deserializer=cursor__pb2.FSIsEnabledForUserResponse.FromString,
+                _registered_method=True)
 
 
 class FileSyncServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def FSUploadFile(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FSIsEnabledForUser(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -6823,6 +6834,11 @@ def add_FileSyncServiceServicer_to_server(servicer, server):
                     servicer.FSUploadFile,
                     request_deserializer=cursor__pb2.FSUploadFileRequest.FromString,
                     response_serializer=cursor__pb2.FSUploadFileResponse.SerializeToString,
+            ),
+            'FSIsEnabledForUser': grpc.unary_unary_rpc_method_handler(
+                    servicer.FSIsEnabledForUser,
+                    request_deserializer=cursor__pb2.FSIsEnabledForUserRequest.FromString,
+                    response_serializer=cursor__pb2.FSIsEnabledForUserResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -6852,6 +6868,33 @@ class FileSyncService(object):
             '/aiserver.v1.FileSyncService/FSUploadFile',
             cursor__pb2.FSUploadFileRequest.SerializeToString,
             cursor__pb2.FSUploadFileResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FSIsEnabledForUser(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aiserver.v1.FileSyncService/FSIsEnabledForUser',
+            cursor__pb2.FSIsEnabledForUserRequest.SerializeToString,
+            cursor__pb2.FSIsEnabledForUserResponse.FromString,
             options,
             channel_credentials,
             insecure,

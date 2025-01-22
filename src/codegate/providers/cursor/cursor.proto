@@ -5069,6 +5069,15 @@ message FSUploadFileResponse {
 	FSSyncError error = 1;
 }
 
+message FSIsEnabledForUserRequest {
+	string uuid = 1;
+}
+
+message FSIsEnabledForUserResponse {
+	bool is_enabled = 1;
+}
+
 service FileSyncService {
 	rpc FSUploadFile(FSUploadFileRequest) returns ( FSUploadFileResponse) {}
+	rpc FSIsEnabledForUser(FSIsEnabledForUserRequest) returns ( FSIsEnabledForUserResponse) {}
 }
