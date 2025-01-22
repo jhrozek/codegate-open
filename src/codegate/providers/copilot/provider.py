@@ -134,21 +134,22 @@ class RequestState:
 
     def get_body(self) -> bytes:
         raw_body = bytes(self.body) if not self.chunked else b''.join(self.chunks_received)
-    
+
         content_encoding = self.headers.get('content-encoding', '').lower()
         if content_encoding == '':
             return raw_body
-    
+
         if 'gzip' in content_encoding:
             try:
                 decompressed_body = gzip.decompress(raw_body)
+                logger.debug(f"Decompressed body {decompressed_body}")
                 return decompressed_body
             except Exception as e:
                 logger.error(f"Error decompressing gzipped body: {e}")
                 return raw_body
         else:
             logger.warning(f"Unsupported content encoding: {content_encoding}")
-        
+
         return raw_body
 
     def is_complete(self) -> bool:
@@ -677,7 +678,10 @@ class CopilotProvider(asyncio.Protocol):
                         complete_request = self.request_state.get_buffer()
                         if self.request_state.is_protobuf_request():
                             logger.debug("Protobuf request detected, skipping pipeline processing")
-                            decoded = self.cursor_provider.decode_by_method(self.request_state.path, self.request_state.get_body())
+                            decoded = self.cursor_provider.decode_by_method(
+                                self.request_state.path,
+                                self.request_state.headers,
+                                self.request_state.get_body())
                             if decoded:
                                 logger.debug(f"Decoded message: {decoded}")
                             self.target_transport.write(data)

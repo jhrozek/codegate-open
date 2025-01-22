@@ -1,10 +1,13 @@
+import gzip
 from dataclasses import dataclass
 from enum import Enum
+from io import BytesIO
 from typing import Dict, Optional, Type, Union
 
 import structlog
 from google.protobuf.json_format import MessageToDict
 from litellm import ChatCompletionRequest
+from protobuf_inspector.types import StandardParser
 
 import codegate.providers.cursor.cursor_pb2 as cursorpb
 from codegate.providers.normalizer.base import ModelInputNormalizer
@@ -47,18 +50,93 @@ class StreamCppNormalizer(ModelInputNormalizer):
         """Convert ChatCompletionRequest back to Cursor's StreamCpp format."""
         return None
 
+class FSUploadFileNormalizer(ModelInputNormalizer):
+    def normalize(self, data: Dict) -> ChatCompletionRequest:
+        """
+        Normalize Cursor's StreamCpp messages into ChatCompletionRequest format.
+
+        Args:
+            data: Dictionary from StreamCppRequest containing a 'code' field
+        """
+        return None
+
+    def denormalize(self, data: ChatCompletionRequest) -> Dict:
+        """Convert ChatCompletionRequest back to Cursor's StreamCpp format."""
+        return None
+
 class ProtoMessageHandler:
     GRPC_PREFIX_LENGTH = 4
     CONNECT_PREFIX_LENGTH = 1
     TOTAL_PREFIX_LENGTH = GRPC_PREFIX_LENGTH + CONNECT_PREFIX_LENGTH
 
     @staticmethod
-    def decode_raw(raw_message: bytes, message_class) -> bytes:
-        logger.debug(f"Original length: {len(raw_message)}")
+    def is_connect_frame(data: bytes) -> tuple[bool, dict]:
+        """
+        Check if a byte sequence starts with Connect protocol framing.
+        Returns (is_connect, details) where details contains compression flag and length if found.
 
-        message_data = raw_message[ProtoMessageHandler.TOTAL_PREFIX_LENGTH:]
-        logger.debug(f"message length: {len(message_data)}")
-        logger.debug(f"message: {message_data}")
+        Connect frame format:
+        - 1 byte compression flag (0 or 1)
+        - 4 bytes message length (big-endian uint32)
+        - Payload with exactly the length specified
+        """
+        if len(data) < 5:  # Need at least 5 bytes for Connect framing
+            return False, {"error": "Message too short"}
+
+        compression_flag = data[0]
+        if compression_flag not in (0, 1):
+            return False, {"error": "Invalid compression flag"}
+
+        # Extract 4-byte length (big-endian)
+        length = int.from_bytes(data[1:5], byteorder='big')
+
+        # Check if actual message length matches declared length
+        expected_total = length + 5  # frame + payload
+        if len(data) != expected_total:
+            return False, {
+                "error": "Message length mismatch",
+                "expected": expected_total,
+                "actual": len(data)
+            }
+
+        return True, {
+            "compression_flag": compression_flag,
+            "message_length": length,
+            "total_length": expected_total
+        }
+
+    @staticmethod
+    def decode_raw(headers: Dict[str, str], raw_message: bytes, message_class) -> bytes:
+        logger.debug(f"Original length: {len(raw_message)}")
+        logger.debug(f"Original message: {raw_message}")
+
+        if headers.get("connect-protocol-version", None):
+            logger.debug("Connect protocol detected")
+
+            is_connect, details = ProtoMessageHandler.is_connect_frame(raw_message)
+            if not is_connect:
+                logger.error(f"Invalid Connect frame: {details}")
+            else:
+                logger.debug(f"Connect frame details: {details}")
+
+            message_data = raw_message[ProtoMessageHandler.TOTAL_PREFIX_LENGTH:]
+            logger.debug(f"message length: {len(message_data)}")
+            logger.debug(f"message: {message_data}")
+        else:
+            message_data = raw_message
+
+        if headers.get('connect-content-encoding', None) == 'gzip':
+            logger.debug("Decompressing message")
+            message_data = gzip.decompress(message_data)
+
+        try:
+            # Create parser and inspect message
+            parser = StandardParser()
+            parsed = parser.parse_message(BytesIO(message_data), "message")
+            # Print the parsed structure
+            print(parsed)
+        except Exception as e:
+            logger.error(f"Failed to parse message: {str(e)}")
 
         message = message_class()
         message.ParseFromString(message_data)
@@ -77,6 +155,7 @@ class ProtoMessageHandler:
 class CursorMethod(str, Enum):
     STREAM_CHAT = "/aiserver.v1.AiService/StreamChat"
     STREAM_CPP = "/aiserver.v1.AiService/StreamCpp"
+    FS_UPLOAD_FILE = "/aiserver.v1.FileSyncService/FSUploadFile"
 
 
 @dataclass
@@ -100,6 +179,10 @@ class CursorProvider:
             proto_class=cursorpb.StreamCppRequest,
             normalizer_class=StreamCppNormalizer,
         ),
+        CursorMethod.FS_UPLOAD_FILE: CursorMessageConfig(
+            proto_class=cursorpb.FSUploadFileRequest,
+            normalizer_class=FSUploadFileNormalizer,
+        ),
     }
 
     def __init__(self):
@@ -109,7 +192,7 @@ class CursorProvider:
             for method, config in self.message_config.items()
         }
 
-    def decode_by_method(self, method: str, raw_message: bytes) -> Optional[ChatCompletionRequest]:
+    def decode_by_method(self, method: str, headers: Dict[str, str], raw_message: bytes) -> Optional[ChatCompletionRequest]:
         logger.debug(f"Decoding message for method: {method}")
 
         try:
@@ -124,7 +207,7 @@ class CursorProvider:
             return None
 
         try:
-            proto_message: Optional[CursorMessage] = ProtoMessageHandler.decode_raw(raw_message, config.proto_class)
+            proto_message: Optional[CursorMessage] = ProtoMessageHandler.decode_raw(headers, raw_message, config.proto_class)
 
             if proto_message:
                 # Convert proto message to dict for the normalizer

@@ -5050,3 +5050,25 @@ service RepositoryService {
 	rpc GetAvailableChunkingStrategies(GetAvailableChunkingStrategiesRequest) returns ( GetAvailableChunkingStrategiesResponse) {}
 	rpc GetLineNumberClassifications(GetLineNumberClassificationsRequest) returns (stream GetLineNumberClassificationsResponse) {}
 }
+
+message FSUploadFileRequest {
+	string uuid = 1;
+	string relative_workspace_path = 2;
+	int32 model_version = 3;
+	// 5 is something odd
+	string sha256_hash = 5;
+}
+
+enum FSSyncError {
+	FS_SYNC_ERROR_UNSPECIFIED = 0;
+	FS_SYNC_ERROR_NON_EXISTANT = 1;
+	FS_SYNC_ERROR_HASH_MISMATCH = 2;
+}
+
+message FSUploadFileResponse {
+	FSSyncError error = 1;
+}
+
+service FileSyncService {
+	rpc FSUploadFile(FSUploadFileRequest) returns ( FSUploadFileResponse) {}
+}

@@ -6789,3 +6789,75 @@ class RepositoryService(object):
             timeout,
             metadata,
             _registered_method=True)
+
+
+class FileSyncServiceStub(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.FSUploadFile = channel.unary_unary(
+                '/aiserver.v1.FileSyncService/FSUploadFile',
+                request_serializer=cursor__pb2.FSUploadFileRequest.SerializeToString,
+                response_deserializer=cursor__pb2.FSUploadFileResponse.FromString,
+                _registered_method=True)
+
+
+class FileSyncServiceServicer(object):
+    """Missing associated documentation comment in .proto file."""
+
+    def FSUploadFile(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_FileSyncServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'FSUploadFile': grpc.unary_unary_rpc_method_handler(
+                    servicer.FSUploadFile,
+                    request_deserializer=cursor__pb2.FSUploadFileRequest.FromString,
+                    response_serializer=cursor__pb2.FSUploadFileResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'aiserver.v1.FileSyncService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('aiserver.v1.FileSyncService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class FileSyncService(object):
+    """Missing associated documentation comment in .proto file."""
+
+    @staticmethod
+    def FSUploadFile(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aiserver.v1.FileSyncService/FSUploadFile',
+            cursor__pb2.FSUploadFileRequest.SerializeToString,
+            cursor__pb2.FSUploadFileResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
