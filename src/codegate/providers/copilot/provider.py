@@ -684,7 +684,7 @@ class CopilotProvider(asyncio.Protocol):
                                 self.request_state.get_body())
                             if decoded:
                                 logger.debug(f"Decoded message: {decoded}")
-                            self.target_transport.write(data)
+                            self.target_transport.write(complete_request)
                         else:
                             logger.debug("http request detected, processing through pipeline")
                             asyncio.create_task(self._forward_data_to_target(complete_request))
