@@ -1,8 +1,10 @@
 import gzip
+import struct
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, Flag
 from io import BytesIO
-from typing import Dict, Optional, Type, Union
+from typing import Any, Dict, Optional, Type, Union
 
 import structlog
 from google.protobuf.json_format import MessageToDict
@@ -14,6 +16,7 @@ from codegate.providers.normalizer.base import ModelInputNormalizer
 
 logger = structlog.get_logger("codegate").bind(origin="cursor_provider")
 
+# TODO: Expand? Or drop since we don't want to keep maintaining this?
 HandledCursorType = Union[
     cursorpb.GetChatRequest,
     cursorpb.StreamCppRequest,
@@ -64,82 +67,179 @@ class FSUploadFileNormalizer(ModelInputNormalizer):
         """Convert ChatCompletionRequest back to Cursor's StreamCpp format."""
         return None
 
-class ProtoMessageHandler:
-    GRPC_PREFIX_LENGTH = 4
-    CONNECT_PREFIX_LENGTH = 1
-    TOTAL_PREFIX_LENGTH = GRPC_PREFIX_LENGTH + CONNECT_PREFIX_LENGTH
+class EnvelopeFlags(Flag):
+    """
+    Connect protocol envelope flags
+    """
+    NONE = 0
+    COMPRESSED = 0b00000001
+    END_STREAM = 0b00000010
 
-    @staticmethod
-    def is_connect_frame(data: bytes) -> tuple[bool, dict]:
-        """
-        Check if a byte sequence starts with Connect protocol framing.
-        Returns (is_connect, details) where details contains compression flag and length if found.
 
-        Connect frame format:
-        - 1 byte compression flag (0 or 1)
-        - 4 bytes message length (big-endian uint32)
-        - Payload with exactly the length specified
-        """
-        if len(data) < 5:  # Need at least 5 bytes for Connect framing
-            return False, {"error": "Message too short"}
+class ContentDecompressor(ABC):
+    """
+    Abstract base class for content decompression strategies
+    """
 
-        compression_flag = data[0]
-        if compression_flag not in (0, 1):
-            return False, {"error": "Invalid compression flag"}
+    @abstractmethod
+    def decompress(self, data: bytes) -> bytes:
+        """Decompress the given bytes"""
+        pass
 
-        # Extract 4-byte length (big-endian)
-        length = int.from_bytes(data[1:5], byteorder='big')
 
-        # Check if actual message length matches declared length
-        expected_total = length + 5  # frame + payload
-        if len(data) != expected_total:
-            return False, {
-                "error": "Message length mismatch",
-                "expected": expected_total,
-                "actual": len(data)
-            }
+class GzipDecompressor(ContentDecompressor):
+    """Handles gzip compressed content"""
 
-        return True, {
-            "compression_flag": compression_flag,
-            "message_length": length,
-            "total_length": expected_total
+    def decompress(self, data: bytes) -> bytes:
+        logger.debug("Decompressing gzip content")
+        return gzip.decompress(data)
+
+
+class PlainTextDecompressor(ContentDecompressor):
+    """Passes through uncompressed content"""
+
+    def decompress(self, data: bytes) -> bytes:
+        logger.debug("Using plaintext pass-through")
+        return data
+
+@dataclass
+class DecodedMessage:
+    """Container for decoded message data"""
+    payload: bytes
+    details: Dict[str, Any]
+
+class ProtoDecoder(ABC):
+    """Abstract base class for protobuf message decoders"""
+
+    def __init__(self):
+        self.decompressors = {
+            'gzip': GzipDecompressor(),
+            'identity': PlainTextDecompressor(),
         }
 
+    @abstractmethod
+    def decode(self, headers: Dict[str, str], raw_message: bytes) -> DecodedMessage:
+        """Decode raw message bytes into a protobuf message"""
+        pass
+
+    def _get_decompressor(self, headers: Dict[str, str]) -> ContentDecompressor:
+        """Get appropriate decompressor based on content-encoding header"""
+        encoding = headers.get('connect-content-encoding', 'identity')
+        return self.decompressors.get(encoding, PlainTextDecompressor())
+
+    def decompress_if_needed(self, headers: Dict[str, str], data: bytes) -> bytes:
+        """Handle content decompression using appropriate strategy"""
+        decompressor = self._get_decompressor(headers)
+        return decompressor.decompress(data)
+
+
+class ConnectDecoder(ProtoDecoder):
+    """Decoder for Connect protocol messages with envelope framing"""
+
+    ENVELOPE_HEADER_LENGTH = 5
+    ENVELOPE_HEADER_PACK = ">BI"  # big-endian unsigned char + unsigned int
+
+    def decode(self, headers: Dict[str, str], raw_message: bytes) -> DecodedMessage:
+        """Decode a Connect protocol message with envelope framing"""
+        if len(raw_message) < self.ENVELOPE_HEADER_LENGTH:
+            raise ValueError(f"Message too short. Need at least {self.ENVELOPE_HEADER_LENGTH} bytes")
+
+        # Decode envelope header
+        flags_byte, payload_length = struct.unpack(
+            self.ENVELOPE_HEADER_PACK,
+            raw_message[:self.ENVELOPE_HEADER_LENGTH]
+        )
+
+        # Validate flags
+        try:
+            flags = EnvelopeFlags(flags_byte)
+        except ValueError:
+            raise ValueError(f"Invalid flags byte: {flags_byte}")
+
+        # Check total message length
+        expected_length = self.ENVELOPE_HEADER_LENGTH + payload_length
+        if len(raw_message) != expected_length:
+            raise ValueError(
+                f"Message length mismatch. Expected {expected_length}, got {len(raw_message)}"
+            )
+
+        # Extract payload
+        payload = raw_message[self.ENVELOPE_HEADER_LENGTH:]
+
+        # Handle compression if needed
+        if flags & EnvelopeFlags.COMPRESSED:
+            payload = self.decompress_if_needed(headers, payload)
+
+        return DecodedMessage(
+            payload=payload,
+            details={
+                "flags": {
+                    "raw": flags_byte,
+                    "compressed": bool(flags & EnvelopeFlags.COMPRESSED),
+                    "end_stream": bool(flags & EnvelopeFlags.END_STREAM)
+                },
+                "payload_length": payload_length,
+                "total_length": expected_length
+            }
+        )
+
+class RawProtoDecoder(ProtoDecoder):
+    """Decoder for raw protobuf messages without envelope framing"""
+
+    def decode(self, headers: Dict[str, str], raw_message: bytes) -> DecodedMessage:
+        """Decode a raw protobuf message"""
+        payload = self.decompress_if_needed(headers, raw_message)
+        return DecodedMessage(
+            payload=payload,
+            details={
+                "length": len(payload)
+            }
+        )
+
+class ProtoMessageDecoder:
+    """Factory class to get appropriate decoder based on message type"""
+
+    def __init__(self):
+        self.connect_decoder = ConnectDecoder()
+        self.raw_decoder = RawProtoDecoder()
+
+    def _get_decoder(self, headers: Dict[str, str]) -> ProtoDecoder:
+        """Get the appropriate decoder based on headers"""
+        if headers.get("content-type", None) == "application/connect+proto":
+            logger.debug("Using Connect protocol decoder")
+            return self.connect_decoder
+        logger.debug("Using raw protobuf decoder")
+        return self.raw_decoder
+
+    def decode_message(self, headers: Dict[str, str], raw_message: bytes) -> Optional[DecodedMessage]:
+        """Decode a message using the appropriate decoder"""
+        try:
+            decoder = self._get_decoder(headers)
+            return decoder.decode(headers, raw_message)
+        except Exception as e:
+            logger.error(f"Failed to decode message: {str(e)}")
+            return None
+
+
+class ProtoMessageHandler:
     @staticmethod
     def decode_raw(headers: Dict[str, str], raw_message: bytes, message_class) -> bytes:
         logger.debug(f"Original length: {len(raw_message)}")
         logger.debug(f"Original message: {raw_message}")
+        logger.debug(f"Headers: {headers}")
 
-        if headers.get("connect-protocol-version", None):
-            logger.debug("Connect protocol detected")
-
-            is_connect, details = ProtoMessageHandler.is_connect_frame(raw_message)
-            if not is_connect:
-                logger.error(f"Invalid Connect frame: {details}")
-            else:
-                logger.debug(f"Connect frame details: {details}")
-
-            message_data = raw_message[ProtoMessageHandler.TOTAL_PREFIX_LENGTH:]
-            logger.debug(f"message length: {len(message_data)}")
-            logger.debug(f"message: {message_data}")
-        else:
-            message_data = raw_message
-
-        if headers.get('connect-content-encoding', None) == 'gzip':
-            logger.debug("Decompressing message")
-            message_data = gzip.decompress(message_data)
-
+        proto_message = ProtoMessageDecoder().decode_message(headers, raw_message)
         try:
             # Create parser and inspect message
             parser = StandardParser()
-            parsed = parser.parse_message(BytesIO(message_data), "message")
+            parsed = parser.parse_message(BytesIO(proto_message.payload), "message")
             # Print the parsed structure
             print(parsed)
         except Exception as e:
             logger.error(f"Failed to parse message: {str(e)}")
 
         message = message_class()
-        message.ParseFromString(message_data)
+        message.ParseFromString(proto_message.payload)
         return message
 
     @staticmethod
@@ -156,6 +256,7 @@ class CursorMethod(str, Enum):
     STREAM_CHAT = "/aiserver.v1.AiService/StreamChat"
     STREAM_CPP = "/aiserver.v1.AiService/StreamCpp"
     FS_UPLOAD_FILE = "/aiserver.v1.FileSyncService/FSUploadFile"
+    FSI_IS_ENABLED = "/aiserver.v1.FileSyncService/FSIsEnabledForUser"
 
 
 @dataclass
@@ -170,6 +271,23 @@ class CursorMessageConfig:
 
 
 class CursorProvider:
+    """
+    This is the intended flow:
+    1. The raw message body is received along with the headers and the method
+    2. If we don't handle the method, we just pass the data through.
+    3. For any handled methods, we try to parse the message into a native Python type
+        i) We first decode the message using the appropriate decoder. In order to decode it, we need to grab the raw protobuf message
+           but that message might be compressed or wrapped in a connect protocol envelope.
+            a) depending on the headers, we choose either a raw protobuf decoder or a connect protocol decoder.
+               The connect protocol decoder would handle the envelope framing and potential decompression of the message.
+               /inside the envelope/
+            b) We then parse the raw protobuf message into a native Python type
+        ii) We then convert the message into the native type
+    4. (not implemented yet) We then normalize the message into a ChatCompletionRequest so it can be passed into a pipeline
+    5. (not implemented yet) The pipeline will then return a ChatCompletionResponse which we will denormalize back into the original message format
+       by packing into protobuf. We need to remember to update the headers in case we decompress a message that was originally compressed.
+       or change the content length if we change the message size.
+    """
     message_config = {
         CursorMethod.STREAM_CHAT: CursorMessageConfig(
             proto_class=cursorpb.GetChatRequest,
@@ -181,6 +299,10 @@ class CursorProvider:
         ),
         CursorMethod.FS_UPLOAD_FILE: CursorMessageConfig(
             proto_class=cursorpb.FSUploadFileRequest,
+            normalizer_class=FSUploadFileNormalizer,
+        ),
+        CursorMethod.FSI_IS_ENABLED: CursorMessageConfig(
+            proto_class=cursorpb.FSIsEnabledForUserRequest,
             normalizer_class=FSUploadFileNormalizer,
         ),
     }
