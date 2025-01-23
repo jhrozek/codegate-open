@@ -41,12 +41,9 @@ class BodyAdapter:
             return urljoin(model_route.endpoint.endpoint, "/api/v1")
         return model_route.endpoint.endpoint
 
-    def set_destination_info(self, model_route: rulematcher.ModelRoute, data: dict) -> dict:
+    def get_destination_info(self, model_route: rulematcher.ModelRoute) -> dict:
         """Set the destination provider info."""
-        new_data = copy.deepcopy(data)
-        new_data["model"] = model_route.model.name
-        new_data["base_url"] = self._get_provider_formatted_url(model_route)
-        return new_data
+        return model_route.model.name, self._get_provider_formatted_url(model_route)
 
 
 class OutputFormatter(ABC):
