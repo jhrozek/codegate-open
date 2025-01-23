@@ -7,11 +7,12 @@ from io import BytesIO
 from typing import Any, Dict, Optional, Type, Union
 
 import structlog
-from google.protobuf.json_format import MessageToDict
+from google.protobuf.json_format import MessageToDict, ParseDict
 from litellm import ChatCompletionRequest
 from protobuf_inspector.types import StandardParser
 
 import codegate.providers.cursor.cursor_pb2 as cursorpb
+from codegate.providers.copilot.request import RequestOut, RequestState
 from codegate.providers.normalizer.base import ModelInputNormalizer
 
 logger = structlog.get_logger("codegate").bind(origin="cursor_provider")
@@ -85,19 +86,36 @@ class ContentDecompressor(ABC):
         """Decompress the given bytes"""
         pass
 
+    @abstractmethod
+    def compress(self, data: bytes) -> bytes:
+        """Compress the given bytes"""
+        pass
+
 
 class GzipDecompressor(ContentDecompressor):
-    """Handles gzip compressed content"""
+    """
+    Handles gzip compressed content
+    """
 
     def decompress(self, data: bytes) -> bytes:
         logger.debug("Decompressing gzip content")
         return gzip.decompress(data)
 
+    def compress(self, data: bytes) -> bytes:
+        logger.debug("Compressing content to gzip")
+        return gzip.compress(data)
+
 
 class PlainTextDecompressor(ContentDecompressor):
-    """Passes through uncompressed content"""
+    """
+    Passes through uncompressed content
+    """
 
     def decompress(self, data: bytes) -> bytes:
+        logger.debug("Using plaintext pass-through")
+        return data
+
+    def compress(self, data: bytes) -> bytes:
         logger.debug("Using plaintext pass-through")
         return data
 
@@ -106,6 +124,8 @@ class DecodedMessage:
     """Container for decoded message data"""
     payload: bytes
     details: Dict[str, Any]
+    native_type: Optional[HandledCursorType] = None
+    flags: EnvelopeFlags = EnvelopeFlags.NONE
 
 class ProtoDecoder(ABC):
     """Abstract base class for protobuf message decoders"""
@@ -171,6 +191,7 @@ class ConnectDecoder(ProtoDecoder):
 
         return DecodedMessage(
             payload=payload,
+            flags=flags,
             details={
                 "flags": {
                     "raw": flags_byte,
@@ -225,19 +246,39 @@ class ProtoMarshaler(ABC):
 
     def __init__(self):
         self.compressors = {
-            'gzip': lambda x: gzip.compress(x),
-            'identity': lambda x: x,
+            'gzip': GzipDecompressor(),
+            'identity': PlainTextDecompressor(),
         }
 
     @abstractmethod
-    def marshal(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
+    def marshal(self, message: DecodedMessage, headers: Dict[str, str]) -> bytes:
         """Marshal message to bytes format"""
         pass
 
-    def _get_compressor(self, headers: Dict[str, str]):
-        """Get appropriate compressor based on content-encoding header"""
+    def compress_if_needed(
+            self,
+            details: Dict[str, Any],
+            headers: Dict[str, str],
+            data: bytes,
+    ) -> bytes:
+        """Handle content decompression using appropriate strategy"""
+        compressor = self._get_compressor(details, headers)
+        return compressor.compress(data)
+
+    def _get_compressor(
+            self,
+            details: Dict[str, Any],
+            headers: Dict[str, str],
+    ) -> ContentDecompressor:
+        """
+        Get appropriate compressor based on content-encoding header
+        """
+        was_compressed = details.get('flags', {}).get('compressed', False)
+        if not was_compressed:
+            return PlainTextDecompressor()
+
         encoding = headers.get('connect-content-encoding', 'identity')
-        return self.compressors.get(encoding, lambda x: x)
+        return self.compressors.get(encoding, PlainTextDecompressor())
 
 
 class ConnectMarshaler(ProtoMarshaler):
@@ -245,27 +286,25 @@ class ConnectMarshaler(ProtoMarshaler):
 
     ENVELOPE_HEADER_PACK = ">BI"
 
-    def marshal(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
-        serialized = message.SerializeToString()
-        compressor = self._get_compressor(headers)
-        payload = compressor(serialized)
+    def marshal(self, message: DecodedMessage, headers: Dict[str, str]) -> bytes:
+        serialized = message.native_type.SerializeToString()
+        logger.debug(f"Marshalled connect message: {serialized}")
+        payload = self.compress_if_needed(message.details, headers, serialized)
 
-        flags = EnvelopeFlags.NONE
-        if headers.get('connect-content-encoding') == 'gzip':
-            flags |= EnvelopeFlags.COMPRESSED
-        flags |= EnvelopeFlags.END_STREAM  # Configurable if needed
+        logger.debug(f"Connect envelope flags: {message.flags}")
 
-        header = struct.pack(self.ENVELOPE_HEADER_PACK, flags.value, len(payload))
-        return header + payload
+        header = struct.pack(self.ENVELOPE_HEADER_PACK, message.flags.value, len(payload))
+        wire_message = header + payload
+        logger.debug(f"Message in connect envelope: {wire_message}")
+        return wire_message
 
 
 class RawProtoMarshaler(ProtoMarshaler):
     """Marshaler for raw protobuf messages"""
 
-    def marshal(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
-        serialized = message.SerializeToString()
-        compressor = self._get_compressor(headers)
-        return compressor(serialized)
+    def marshal(self, message: DecodedMessage, headers: Dict[str, str]) -> bytes:
+        serialized = message.native_type.SerializeToString()
+        return self.compress_if_needed(message.details, headers, serialized)
 
 
 class ProtoMessageMarshaler:
@@ -280,7 +319,7 @@ class ProtoMessageMarshaler:
             return self.connect_marshaler
         return self.raw_marshaler
 
-    def marshal_message(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
+    def marshal_message(self, message: DecodedMessage, headers: Dict[str, str]) -> bytes:
         marshaler = self._get_marshaler(headers)
         return marshaler.marshal(message, headers)
 
@@ -298,10 +337,9 @@ class ProtoMessageHandler:
             headers: Dict[str, str],
             raw_message: bytes,
             message_class,
-    ) -> bytes:
+    ) -> Optional[DecodedMessage]:
         logger.debug(f"Original length: {len(raw_message)}")
         logger.debug(f"Original message: {raw_message}")
-        logger.debug(f"Headers: {headers}")
 
         proto_message = ProtoMessageDecoder().decode_message(headers, raw_message)
         if not proto_message:
@@ -311,12 +349,13 @@ class ProtoMessageHandler:
 
         message = message_class()
         message.ParseFromString(proto_message.payload)
-        return message
+        proto_message.native_type = message
+        return proto_message
 
     @staticmethod
     def encode(
             headers: Dict[str, str],
-            message: HandledCursorType,
+            message: DecodedMessage,
     ) -> bytes:
         return ProtoMessageMarshaler().marshal_message(message, headers)
 
@@ -382,43 +421,73 @@ class CursorProvider:
             for method, config in self.message_config.items()
         }
 
-    def process_request(
+    def process_request(self, request_in: RequestState) -> RequestOut:
+        orig_body = request_in.get_body()
+        body = self._process(
+            request_in.path,
+            request_in.headers,
+            orig_body,
+        )
+
+        logger.debug(f"Original body: {orig_body}")
+        logger.debug(f"Processed body: {body}")
+
+        return RequestOut(
+            method=request_in.method,
+            url=request_in.url,
+            version=request_in.version,
+            headers=request_in.headers,
+            body=body,
+        )
+
+    def _process(
             self,
             method: str,
             headers: Dict[str, str],
             raw_message: bytes,
     ) -> bytes:
-        proto_native_message = self.decode(method, headers, raw_message)
-        if not proto_native_message:
+        decoded_message = self._decode(method, headers, raw_message)
+        if not decoded_message:
             # this means the method was not handled
             return raw_message
 
-        if isinstance(proto_native_message, cursorpb.GetChatRequest):
-            cursor_message = proto_native_message
-            print("--------------------")
-            print(cursor_message)
-            print("--------------------")
-
+        # if isinstance(decoded_message.native_type, cursorpb.GetChatRequest):
+        #     print("--------------------")
+        #     print(decoded_message.native_type)
+        #     print("--------------------")
+        #
+        #     request_dict = MessageToDict(decoded_message.native_type)
+        #     for msg in request_dict['conversation']:
+        #         if msg['type'] == 'MESSAGE_TYPE_HUMAN':
+        #             msg['text'] = "Repeat what the user says, just in Swedish: " + msg['text']
+        #
+        #     # Convert back to protobuf
+        #     new_request = ParseDict(request_dict, cursorpb.GetChatRequest())
+        #     print("--------------------")
+        #     print(new_request)
+        #     print("--------------------")
+        #     decoded_message.native_type = new_request
+        #
         # TODO: Normalize the message and run the pipeline
 
-        return self.encode(method, headers, proto_native_message)
+        return self._encode(method, headers, decoded_message)
 
-    def encode(
+    def _encode(
             self,
             method: str,
             headers: Dict[str, str],
-            raw_message: HandledCursorType,
+            decoded_message: DecodedMessage,
     ) -> Optional[bytes]:
         logger.debug(f"Encoding message for method: {method}")
-        return ProtoMessageHandler.encode(headers, raw_message)
+        return ProtoMessageHandler.encode(headers, decoded_message)
 
 
-    def decode(
+    def _decode(
             self,
             method: str,
             headers: Dict[str, str],
             raw_message: bytes,
-    ) -> Optional[HandledCursorType]:
+    ) -> Optional[DecodedMessage]:
         logger.debug(f"Decoding message for method: {method}")
 
         try:
@@ -432,19 +501,8 @@ class CursorProvider:
             logger.debug(f"Unhandled method: {method}")
             return None
 
-        try:
-            proto_message: Optional[HandledCursorType] = ProtoMessageHandler.decode(headers, raw_message, config.proto_class)
-            if not proto_message:
-                return None
-
-            # Convert proto message to dict for the normalizer
-            dict_message = MessageToDict(
-                proto_message,
-                preserving_proto_field_name=True
-            )
-            logger.debug(f"Decoded message: {dict_message}")
-
-            return proto_message
-        except Exception as e:
-            logger.error(f"Failed to decode message: {str(e)}")
+        decoded_message: Optional[DecodedMessage] = ProtoMessageHandler.decode(headers, raw_message, config.proto_class)
+        if not decoded_message:
             return None
+
+        return decoded_message
