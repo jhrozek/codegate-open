@@ -1,4 +1,4 @@
-.PHONY: clean install format lint test security build all
+.PHONY: clean install format lint test security build all cursor-proto
 CONTAINER_BUILD?=docker buildx build
 # This is the container tag. Only used for development purposes.
 VER?=latest
@@ -43,5 +43,15 @@ image-build:
 		. \
 		-t ghcr.io/stacklok/codegate:$(VER) \
 		--load
+
+cursor-proto:
+    pushd src/codegate/providers/cursor && \
+    python -m grpc_tools.protoc \
+        --proto_path=. \
+        --python_out=. \
+        --grpc_python_out=. \
+        --experimental_allow_proto3_optional \
+        cursor.proto && \
+    popd
 
 all: clean install format lint test security build

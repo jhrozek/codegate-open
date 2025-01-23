@@ -20,10 +20,9 @@ logger = structlog.get_logger("codegate").bind(origin="cursor_provider")
 HandledCursorType = Union[
     cursorpb.GetChatRequest,
     cursorpb.StreamCppRequest,
+    cursorpb.FSUploadFileRequest,
+    cursorpb.FSIsEnabledForUserRequest,
 ]
-
-# Type for all possible Cursor message types
-CursorMessage = Union[cursorpb.GetChatRequest, cursorpb.StreamCppRequest]
 
 class StreamChatNormalizer(ModelInputNormalizer):
     def normalize(self, data: cursorpb.GetChatRequest) -> ChatCompletionRequest:
@@ -221,36 +220,105 @@ class ProtoMessageDecoder:
             return None
 
 
+class ProtoMarshaler(ABC):
+    """Abstract base class for protobuf message marshalers"""
+
+    def __init__(self):
+        self.compressors = {
+            'gzip': lambda x: gzip.compress(x),
+            'identity': lambda x: x,
+        }
+
+    @abstractmethod
+    def marshal(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
+        """Marshal message to bytes format"""
+        pass
+
+    def _get_compressor(self, headers: Dict[str, str]):
+        """Get appropriate compressor based on content-encoding header"""
+        encoding = headers.get('connect-content-encoding', 'identity')
+        return self.compressors.get(encoding, lambda x: x)
+
+
+class ConnectMarshaler(ProtoMarshaler):
+    """Marshaler for Connect protocol messages with envelope framing"""
+
+    ENVELOPE_HEADER_PACK = ">BI"
+
+    def marshal(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
+        serialized = message.SerializeToString()
+        compressor = self._get_compressor(headers)
+        payload = compressor(serialized)
+
+        flags = EnvelopeFlags.NONE
+        if headers.get('connect-content-encoding') == 'gzip':
+            flags |= EnvelopeFlags.COMPRESSED
+        flags |= EnvelopeFlags.END_STREAM  # Configurable if needed
+
+        header = struct.pack(self.ENVELOPE_HEADER_PACK, flags.value, len(payload))
+        return header + payload
+
+
+class RawProtoMarshaler(ProtoMarshaler):
+    """Marshaler for raw protobuf messages"""
+
+    def marshal(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
+        serialized = message.SerializeToString()
+        compressor = self._get_compressor(headers)
+        return compressor(serialized)
+
+
+class ProtoMessageMarshaler:
+    """Factory class to get appropriate marshaler based on message type"""
+
+    def __init__(self):
+        self.connect_marshaler = ConnectMarshaler()
+        self.raw_marshaler = RawProtoMarshaler()
+
+    def _get_marshaler(self, headers: Dict[str, str]) -> ProtoMarshaler:
+        if headers.get("content-type") == "application/connect+proto":
+            return self.connect_marshaler
+        return self.raw_marshaler
+
+    def marshal_message(self, message: HandledCursorType, headers: Dict[str, str]) -> bytes:
+        marshaler = self._get_marshaler(headers)
+        return marshaler.marshal(message, headers)
+
 class ProtoMessageHandler:
+    def _dump_message(self, message):
+        try:
+            parser = StandardParser()
+            parsed = parser.parse_message(BytesIO(message), "message")
+            logger.debug(parsed)
+        except Exception as e:
+            logger.error(f"Failed to parse message: {str(e)}")
+
     @staticmethod
-    def decode_raw(headers: Dict[str, str], raw_message: bytes, message_class) -> bytes:
+    def decode(
+            headers: Dict[str, str],
+            raw_message: bytes,
+            message_class,
+    ) -> bytes:
         logger.debug(f"Original length: {len(raw_message)}")
         logger.debug(f"Original message: {raw_message}")
         logger.debug(f"Headers: {headers}")
 
         proto_message = ProtoMessageDecoder().decode_message(headers, raw_message)
-        try:
-            # Create parser and inspect message
-            parser = StandardParser()
-            parsed = parser.parse_message(BytesIO(proto_message.payload), "message")
-            # Print the parsed structure
-            print(parsed)
-        except Exception as e:
-            logger.error(f"Failed to parse message: {str(e)}")
+        if not proto_message:
+            return None
+
+        ProtoMessageHandler()._dump_message(proto_message.payload)
 
         message = message_class()
         message.ParseFromString(proto_message.payload)
         return message
 
     @staticmethod
-    def encode_with_prefixes(message) -> bytes:
-        serialized = message.SerializeToString()
-        length = len(serialized)
-
-        grpc_prefix = length.to_bytes(4, 'big')
-        connect_prefix = bytes([length & 0xFF])
-
-        return grpc_prefix + connect_prefix + serialized
+    def encode(
+            headers: Dict[str, str],
+            message: HandledCursorType,
+    ) -> bytes:
+        return ProtoMessageMarshaler().marshal_message(message, headers)
 
 class CursorMethod(str, Enum):
     STREAM_CHAT = "/aiserver.v1.AiService/StreamChat"
@@ -262,7 +330,7 @@ class CursorMethod(str, Enum):
 @dataclass
 class CursorMessageConfig:
     """Configuration for a specific Cursor message type"""
-    proto_class: Type[CursorMessage]
+    proto_class: Type[HandledCursorType]
     normalizer_class: Type[ModelInputNormalizer]
 
     def create_normalizer(self) -> ModelInputNormalizer:
@@ -314,7 +382,43 @@ class CursorProvider:
             for method, config in self.message_config.items()
         }
 
-    def decode_by_method(self, method: str, headers: Dict[str, str], raw_message: bytes) -> Optional[ChatCompletionRequest]:
+    def process_request(
+            self,
+            method: str,
+            headers: Dict[str, str],
+            raw_message: bytes,
+    ) -> bytes:
+        proto_native_message = self.decode(method, headers, raw_message)
+        if not proto_native_message:
+            # this means the method was not handled
+            return raw_message
+
+        if isinstance(proto_native_message, cursorpb.GetChatRequest):
+            cursor_message = proto_native_message
+            print("--------------------")
+            print(cursor_message)
+            print("--------------------")
+
+        # TODO: Normalize the message and run the pipeline
+
+        return self.encode(method, headers, proto_native_message)
+
+    def encode(
+            self,
+            method: str,
+            headers: Dict[str, str],
+            raw_message: HandledCursorType,
+    ) -> Optional[bytes]:
+        logger.debug(f"Encoding message for method: {method}")
+        return ProtoMessageHandler.encode(headers, raw_message)
+
+
+    def decode(
+            self,
+            method: str,
+            headers: Dict[str, str],
+            raw_message: bytes,
+    ) -> Optional[HandledCursorType]:
         logger.debug(f"Decoding message for method: {method}")
 
         try:
@@ -329,19 +433,18 @@ class CursorProvider:
             return None
 
         try:
-            proto_message: Optional[CursorMessage] = ProtoMessageHandler.decode_raw(headers, raw_message, config.proto_class)
+            proto_message: Optional[HandledCursorType] = ProtoMessageHandler.decode(headers, raw_message, config.proto_class)
+            if not proto_message:
+                return None
 
-            if proto_message:
-                # Convert proto message to dict for the normalizer
-                dict_message = MessageToDict(
-                    proto_message,
-                    preserving_proto_field_name=True
-                )
-                logger.debug(f"Decoded message: {dict_message}")
-                normalizer = self.normalizers[cursor_method]
-                normalized =  normalizer.normalize(proto_message)
-                return dict_message
-            return None
+            # Convert proto message to dict for the normalizer
+            dict_message = MessageToDict(
+                proto_message,
+                preserving_proto_field_name=True
+            )
+            logger.debug(f"Decoded message: {dict_message}")
+
+            return proto_message
         except Exception as e:
             logger.error(f"Failed to decode message: {str(e)}")
             return None

@@ -181,6 +181,59 @@ class RequestState:
         headers = "\r\n".join(f"{k}: {v}" for k, v in self.headers.items())
         return f"{request_line}{headers}\r\n\r\n".encode() + bytes(self.body)
 
+
+@dataclass
+class RequestOut:
+    method: str
+    url: str
+    version: str
+    headers: Dict[str, str]
+    body: bytes
+
+    def to_bytes(self) -> bytes:
+        """Reconstruct HTTP request from modifications, optionally chunking the body"""
+        request_line = f"{self.method} {self.url} {self.version}\r\n"
+
+        chunked = self.headers.get('transfer-encoding', '').lower() == 'chunked'
+
+        headers = self.headers.copy()
+        if chunked:
+            headers['transfer-encoding'] = 'chunked'
+        elif self.body:
+            headers['content-length'] = str(len(self.body))
+
+        headers_str = "\r\n".join(f"{k}: {v}" for k, v in headers.items())
+        request = f"{request_line}{headers_str}\r\n\r\n".encode()
+
+        if chunked:
+            chunk_size = hex(len(self.body))[2:] + '\r\n'
+            return request + chunk_size.encode() + self.body + b'\r\n0\r\n\r\n'
+
+        return request + self.body
+
+def request_in_to_out(request_in: RequestState) -> RequestOut:
+    """
+    Reconstruction of the request from the RequestState object
+
+    Will be useful for pipeline fall-throughs, e.g. requests that
+    are not handled at all.
+    """
+
+    # this is temporary, the body would be returned by the pipeline
+    # already compressed
+    content_encoding = request_in.headers.get('content-encoding', '').lower()
+    body = request_in.get_body()
+    if 'gzip' in content_encoding and body:
+        body = gzip.compress(body)
+
+    return RequestOut(
+        method=request_in.method,
+        url=request_in.url,
+        version=request_in.version,
+        headers=request_in.headers,
+        body=body,
+    )
+
 @dataclass
 class HttpRequest:
     """Data class to store HTTP request details"""
@@ -678,13 +731,15 @@ class CopilotProvider(asyncio.Protocol):
                         complete_request = self.request_state.get_buffer()
                         if self.request_state.is_protobuf_request():
                             logger.debug("Protobuf request detected, skipping pipeline processing")
-                            decoded = self.cursor_provider.decode_by_method(
+                            processed_request = request_in_to_out(self.request_state)
+                            decoded = self.cursor_provider.process_request(
                                 self.request_state.path,
-                                self.request_state.headers,
-                                self.request_state.get_body())
+                                processed_request.headers,
+                                processed_request.body)
                             if decoded:
                                 logger.debug(f"Decoded message: {decoded}")
-                            self.target_transport.write(complete_request)
+                            logger.debug(f"Processed request: {processed_request.to_bytes()}")
+                            self.target_transport.write(processed_request.to_bytes())
                         else:
                             logger.debug("http request detected, processing through pipeline")
                             asyncio.create_task(self._forward_data_to_target(complete_request))
