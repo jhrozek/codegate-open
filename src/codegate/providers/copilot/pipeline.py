@@ -115,7 +115,7 @@ class CopilotPipeline(ABC):
                 extra_headers=CopilotPipeline._get_copilot_headers(headers_dict),
             )
         except Exception as e:
-            logger.error(f"Pipeline processing error: {e}")
+            logger.error(f"Pipeline processing error: {e}", exc_info=e)
             return body, None
 
         if result.context.shortcut_response:
