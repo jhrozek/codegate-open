@@ -250,7 +250,7 @@ class BaseProvider(ABC):
         input_pipeline_result = await self._run_input_pipeline(
             normalized_request,
             api_key,
-            self.base_url,
+            self._get_base_url(), # FIXME
             client_type,
             is_fim_request,
         )
@@ -272,7 +272,7 @@ class BaseProvider(ABC):
         # based on the streaming flag
         model_response = await self._completion_handler.execute_completion(
             provider_request,
-            base_url=self.base_url,
+            self._get_base_url(), # FIXME
             api_key=api_key,
             stream=streaming,
             is_fim_request=is_fim_request,
