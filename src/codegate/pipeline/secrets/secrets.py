@@ -502,7 +502,9 @@ class SecretUnredactionStep(OutputPipelineStep):
                 return []
 
             # No markers or partial markers, let pipeline handle the chunk normally
-            content.set_text(context.prefix_buffer + content.get_text())
+            text = content.get_text()
+            if text:
+                content.set_text(context.prefix_buffer + text)
             context.prefix_buffer = ""
             return [chunk]
         else:

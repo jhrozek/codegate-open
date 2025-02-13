@@ -128,7 +128,10 @@ archived packages: {libobjects_text}\n"
 
         for content in chunk.get_content():
             # Get current content plus this new chunk
-            current_content = "".join(context.processed_content + [txt for txt in content.get_text()])
+            txt = content.get_text()
+            if not txt:
+                continue
+            current_content = "".join(context.processed_content + [txt])
 
             # Extract snippets from current content
             snippets = self.extractor.extract_snippets(current_content)
