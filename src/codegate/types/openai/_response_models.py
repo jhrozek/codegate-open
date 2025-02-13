@@ -159,3 +159,12 @@ class StreamingChatCompletion(pydantic.BaseModel):
     def get_content(self) -> Iterable[ChoiceDelta]:
         for choice in self.choices:
             yield choice
+
+    def set_content(self, content: str) -> None:
+        self.choices = [
+            ChoiceDelta(
+                delta=MessageDelta(
+                    content=content,
+                    role="assistant",
+                ),
+                index=0)]

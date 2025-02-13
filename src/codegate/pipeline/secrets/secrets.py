@@ -540,7 +540,7 @@ class SecretRedactionNotifier(OutputPipelineStep):
         else:
             # TODO verify if deep-copy is necessary
             copy = original_chunk.model_copy(deep=True)
-            copy.set_text(content)
+            copy.set_content(content)
             return copy
 
     async def process_chunk(

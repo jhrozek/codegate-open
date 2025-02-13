@@ -237,6 +237,11 @@ class AssistantMessage(pydantic.BaseModel):
     def set_text(self, text) -> None:
         self.content = text
 
+    def set_text(self, text) -> None:
+        if isinstance(self.content, str):
+            self.content = text
+        # TODO we should probably return an error otherwise
+
     def get_content(self):
         if isinstance(self.content, str):
             yield self
@@ -369,3 +374,13 @@ class ChatCompletionRequest(pydantic.BaseModel):
                 for txt in content.get_text():
                     return txt
         return default
+
+    def add_to_last_system_prompt(self, text: str) -> None:
+        for msg in reversed(self.messages):
+            if isinstance(msg, SystemMessage):
+                existing_text = ["".join(txt) for txt in msg.get_text()]
+                msg.set_text(f"{existing_text}\n\nHere are additional instructions:\n\n{text}")
+                return
+
+        # No system message found, add a new one
+        self.add_system_prompt(text)

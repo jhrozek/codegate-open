@@ -49,7 +49,7 @@ class CodeCommentStep(OutputPipelineStep):
         else:
             # TODO verify if deep-copy is necessary
             copy = original_chunk.model_copy(deep=True)
-            copy.set_text(content)
+            copy.set_content(content)
             return copy
 
     async def _snippet_comment(self, snippet: CodeSnippet, context: PipelineContext) -> str:
