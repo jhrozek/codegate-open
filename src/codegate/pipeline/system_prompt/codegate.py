@@ -96,19 +96,18 @@ class SystemPrompt(PipelineStep):
         ##### NEW CODE PATH #####
 
         if type(request) != ChatCompletionRequest:
-            request_system_message = {}
-            req_sys_prompt = ""
-            for sysprompt in request.get_system_prompt():
-                req_sys_prompt = sysprompt
+            if should_add_codegate_sys_prompt:
+                request.add_to_last_system_prompt(self.codegate_system_prompt)
 
-            system_prompt = await self._construct_system_prompt(
-                context.client,
-                wrksp_custom_instructions,
-                req_sys_prompt,
-                should_add_codegate_sys_prompt,
-            )
-            context.add_alert(self.name, trigger_string=system_prompt)
-            request.set_system_prompt(system_prompt)
+            # Add workspace system prompt if present
+            if wrksp_custom_instructions:
+                request.add_to_last_system_prompt(wrksp_custom_instructions)
+
+            # Add per client system prompt
+            if context.client and context.client.value in self.client_prompts:
+                request.add_to_last_system_prompt(self.client_prompts[context.client.value])
+
+            context.add_alert(self.name, trigger_string="implement get the last system prompt?")
 
             return PipelineResult(request=request, context=context)
 
