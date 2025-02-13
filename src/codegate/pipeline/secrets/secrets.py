@@ -568,32 +568,28 @@ class SecretRedactionNotifier(OutputPipelineStep):
         )
 
         # Check if this is the first chunk (delta role will be present, others will not)
-        # if len(chunk.choices) > 0 and chunk.choices[0].delta.role:
-        for _ in itertools.takewhile(lambda x: x[0] == 1, enumerate(chunk.get_content())):
-            redacted_count = input_context.metadata["redacted_secrets_count"]
-            secret_text = "secret" if redacted_count == 1 else "secrets"
-            # Create notification chunk
-            if tool_name in ["cline", "kodu"]:
-                notification_chunk = self._create_chunk(
-                    chunk,
-                    f"<thinking>\n🛡️ [CodeGate prevented {redacted_count} {secret_text}]"
-                    f"(http://localhost:9090/?search=codegate-secrets) from being leaked "
-                    f"by redacting them.</thinking>\n\n",
-                )
-                # TODO fix this
-                # notification_chunk.choices[0].delta.role = "assistant"
-            else:
-                notification_chunk = self._create_chunk(
-                    chunk,
-                    f"\n🛡️ [CodeGate prevented {redacted_count} {secret_text}]"
-                    f"(http://localhost:9090/?search=codegate-secrets) from being leaked "
-                    f"by redacting them.\n\n",
-                )
+        redacted_count = input_context.metadata["redacted_secrets_count"]
+        secret_text = "secret" if redacted_count == 1 else "secrets"
+        # Create notification chunk
+        if tool_name in ["cline", "kodu"]:
+            notification_chunk = self._create_chunk(
+                chunk,
+                f"<thinking>\n🛡️ [CodeGate prevented {redacted_count} {secret_text}]"
+                f"(http://localhost:9090/?search=codegate-secrets) from being leaked "
+                f"by redacting them.</thinking>\n\n",
+            )
+            # TODO fix this
+            # notification_chunk.choices[0].delta.role = "assistant"
+        else:
+            notification_chunk = self._create_chunk(
+                chunk,
+                f"\n🛡️ [CodeGate prevented {redacted_count} {secret_text}]"
+                f"(http://localhost:9090/?search=codegate-secrets) from being leaked "
+                f"by redacting them.\n\n",
+            )
 
-            # Reset the counter
-            input_context.metadata["redacted_secrets_count"] = 0
+        # Reset the counter
+        input_context.metadata["redacted_secrets_count"] = 0
 
-            # Return both the notification and original chunk
-            return [notification_chunk, chunk]
-
-        return [chunk]
+        # Return both the notification and original chunk
+        return [notification_chunk, chunk]
