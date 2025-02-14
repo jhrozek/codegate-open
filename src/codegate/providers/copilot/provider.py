@@ -53,6 +53,7 @@ def _dump_data(suffix, func, trigger: bytes | None = None):
             if not trigger or data == trigger:
                 ts = datetime.datetime.now()
                 fname = os.path.join(TEMPDIR.name, ts.strftime(f"{suffix}-%Y%m%dT%H%M%S%f.txt"))
+                print("Dumping to", fname)
                 with open(fname, mode="wb") as fd:
                     fd.write(buf)
                 buf = bytearray()
@@ -328,7 +329,12 @@ class CopilotProvider(asyncio.Protocol):
         """Check if adding new data would exceed buffer size limit"""
         return len(self.buffer) + len(new_data) <= MAX_BUFFER_SIZE
 
-    async def _forward_data_through_pipeline(self, data: bytes) -> Union[HttpRequest, HttpResponse]:
+    @_dump_request
+    def _dump_create_http_request(self, data: bytes) -> bytes:
+        return data
+
+    async def _forward_data_through_pipeline(self, data: bytes) -> Union[HttpRequest, HttpResponse, bytes]:
+        self._dump_create_http_request(data)
         http_request = http_request_from_bytes(data)
         if not http_request:
             # we couldn't parse this into an HTTP request, so we just pass through
@@ -414,7 +420,6 @@ class CopilotProvider(asyncio.Protocol):
                     pipeline_output = pipeline_output.reconstruct()
                 self._target_transport_write(pipeline_output)
 
-    @_dump_request
     def _target_transport_write(self, data: bytes) -> None:
         self.target_transport.write(data)
 

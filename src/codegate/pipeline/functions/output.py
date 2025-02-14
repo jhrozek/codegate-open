@@ -25,34 +25,43 @@ class FunctionCallCheckStep(OutputPipelineStep):
         return "function-call-check"
 
     @staticmethod
-    def _gather_from_chunk(chunk) -> Tuple[str, str]:
+    def _gather_from_chunk(chunk) -> Tuple[str, str, str]:
         """Gather the function and arguments from the buffer"""
+        id = ""
         function = ""
         arguments = ""
         for choice in chunk.get_content():
-            for function_chunk, arguments_chunk in choice.get_tool_calls():
+            for id_chunk, function_chunk, arguments_chunk in choice.get_tool_calls():
+                id += id_chunk if id_chunk else ""
                 function += function_chunk if function_chunk else ""
                 arguments += arguments_chunk if arguments_chunk else ""
-        return function, arguments
+        return id, function, arguments
 
     def tool_call_chunk(self):
-        ret_chunk = self.buffer[0].model_copy(deep=True)
+        call_chunk = self.buffer[0].model_copy(deep=True)
 
+        id = ""
         function = ""
         arguments = ""
         for chunk in self.buffer:
-            fn_chunk, arg_chunk = self._gather_from_chunk(chunk)
-            function += fn_chunk
-            arguments += arg_chunk
+            id_part, fn_part, arg_part = self._gather_from_chunk(chunk)
+            id += id_part
+            function += fn_part
+            arguments += arg_part
 
-        if "requirements.txt" in arguments:
-            return self._create_chunk(ret_chunk, "CodeGate prevented the modification of the requirements.txt file.")
+        # Check if the tool call is allowed
+        if function == "run_in_terminal" and "pip install" in arguments:
+            return self._create_chunk(
+                call_chunk, "CodeGate prevented the installation of packages using pip."
+            )
 
-        for choice in ret_chunk.get_content():
-            choice.set_tool_calls(function, arguments)
+        for choice in call_chunk.get_content():
+            choice.set_tool_calls(id, function, arguments)
             break
 
-        return ret_chunk
+        print(f"Tool call chunk: {call_chunk}")
+
+        return call_chunk
 
     def _create_chunk(self, original_chunk: ModelResponse, content: str) -> ModelResponse:
         """
@@ -75,9 +84,9 @@ class FunctionCallCheckStep(OutputPipelineStep):
         for choice in chunk.get_content():
             if choice.finished_tool_calls():
                 logger.debug("Finishes tool call")
-                full_function = self.tool_call_chunk()
+                call = self.tool_call_chunk()
                 self.buffer = []
-                return [full_function, chunk]
+                return [call, chunk]
             elif any(tc for tc in choice.get_tool_calls()):
                 # Buffer the chunk since it has tool calls
                 logger.debug("Found tool call")

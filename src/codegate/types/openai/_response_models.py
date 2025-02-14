@@ -126,14 +126,19 @@ class ChoiceDelta(pydantic.BaseModel):
     def finished_tool_calls(self) -> bool:
         return self.finish_reason == "tool_calls"
 
-    def get_tool_calls(self) -> Iterable[Tuple[str, str]]:
+    def get_tool_calls(self) -> Iterable[Tuple[str, str, str]]:
         if self.delta.tool_calls:
             for tool_call in self.delta.tool_calls:
                 if tool_call.function:
-                    yield tool_call.function.name, tool_call.function.arguments
+                    yield tool_call.id, tool_call.function.name, tool_call.function.arguments
 
-    def set_tool_calls(self, function, arguments) -> None:
-        self.delta.tool_calls = [ToolCall(function=FunctionCall(name=function, arguments=arguments))]
+    def set_tool_calls(self, id, function, arguments) -> None:
+        self.delta.tool_calls = [
+            ToolCall(
+                id=id,
+                type="function",
+                function=FunctionCall(name=function, arguments=arguments),
+            )]
 
     def get_text(self) -> str | None:
         if self.delta.content:
