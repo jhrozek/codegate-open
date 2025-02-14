@@ -41,7 +41,7 @@ if os.getenv("CODEGATE_DUMP_DIR"):
     TEMPDIR = tempfile.TemporaryDirectory(prefix="codegate-", dir=basedir, delete=False)
 
 
-def _dump_data(suffix, func):
+def _dump_data(suffix, func, trigger: bytes | None = None):
     if os.getenv("CODEGATE_DUMP_DIR"):
         buf = bytearray(b"")
 
@@ -50,7 +50,7 @@ def _dump_data(suffix, func):
             func(self, data)
             buf.extend(data)
 
-            if data == b"0\r\n\r\n":
+            if not trigger or data == trigger:
                 ts = datetime.datetime.now()
                 fname = os.path.join(TEMPDIR.name, ts.strftime(f"{suffix}-%Y%m%dT%H%M%S%f.txt"))
                 with open(fname, mode="wb") as fd:
@@ -66,7 +66,7 @@ def _dump_request(func):
 
 
 def _dump_response(func):
-    return _dump_data("response", func)
+    return _dump_data("response", func, b"0\r\n\r\n")
 
 
 # Constants
