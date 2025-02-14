@@ -6,6 +6,7 @@ from codegate.pipeline.base import PipelineStep, SequentialPipelineProcessor
 from codegate.pipeline.cli.cli import CodegateCli
 from codegate.pipeline.codegate_context_retriever.codegate import CodegateContextRetriever
 from codegate.pipeline.comment.output import CodeCommentStep
+from codegate.pipeline.functions.output import FunctionCallCheckStep
 from codegate.pipeline.output import OutputPipelineProcessor, OutputPipelineStep
 from codegate.pipeline.pii.pii import (
     CodegatePii,
@@ -65,6 +66,7 @@ class PipelineFactory:
             PiiRedactionNotifier(),
             PiiUnRedactionStep(),
             CodeCommentStep(),
+            FunctionCallCheckStep(),
         ]
         return OutputPipelineProcessor(output_steps)
 

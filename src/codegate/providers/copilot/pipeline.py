@@ -92,9 +92,10 @@ class CopilotPipeline(ABC):
     ) -> Tuple[bytes, PipelineContext | None]:
         """Common processing logic for all strategies"""
         try:
+            print(f"Processing body: '{body}'")
             normalized_body = self.normalizer.normalize(body)
         except Exception as e:
-            logger.error(f"Pipeline processing error: {e}")
+            logger.error(f"Pipeline processing error: {e}", exc_info=e)
             return body, None
 
         headers_dict = {}
@@ -127,7 +128,7 @@ class CopilotPipeline(ABC):
                 logger.info(f"Pipeline created shortcut response: {body}")
                 return body, result.context
             except Exception as e:
-                logger.error(f"Pipeline processing error: {e}")
+                logger.error(f"Pipeline processing error: {e}", exc_info=e)
                 return body, None
 
         elif result.request:

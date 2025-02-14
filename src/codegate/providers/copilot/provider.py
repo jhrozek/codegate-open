@@ -412,7 +412,11 @@ class CopilotProvider(asyncio.Protocol):
             if self.target_transport and not self.target_transport.is_closing():
                 if isinstance(pipeline_output, HttpRequest):
                     pipeline_output = pipeline_output.reconstruct()
-                self.target_transport.write(pipeline_output)
+                self._target_transport_write(pipeline_output)
+
+    @_dump_request
+    def _target_transport_write(self, data: bytes) -> None:
+        self.target_transport.write(data)
 
     def _has_complete_body(self) -> bool:
         """
