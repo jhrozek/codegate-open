@@ -6,12 +6,15 @@ from codegate.pipeline.base import PipelineStep, SequentialPipelineProcessor
 from codegate.pipeline.cli.cli import CodegateCli
 from codegate.pipeline.codegate_context_retriever.codegate import CodegateContextRetriever
 from codegate.pipeline.comment.output import CodeCommentStep
+from codegate.pipeline.mcp.add_mcp_tools import AddMcpTools
+from codegate.pipeline.mcp.output import FunctionCallCheckStep
 from codegate.pipeline.output import OutputPipelineProcessor, OutputPipelineStep
 from codegate.pipeline.pii.pii import (
     CodegatePii,
     PiiRedactionNotifier,
     PiiUnRedactionStep,
 )
+from codegate.pipeline.mcp.manager import Manager as McpManager
 from codegate.pipeline.secrets.manager import SecretsManager
 from codegate.pipeline.secrets.secrets import (
     CodegateSecrets,
@@ -22,7 +25,8 @@ from codegate.pipeline.system_prompt.codegate import SystemPrompt
 
 
 class PipelineFactory:
-    def __init__(self, secrets_manager: SecretsManager):
+    def __init__(self, secrets_manager: SecretsManager, mcp_manager: McpManager = None):
+        self.mcp_manager = mcp_manager
         self.secrets_manager = secrets_manager
 
     def create_input_pipeline(self, client_type: ClientType) -> SequentialPipelineProcessor:
@@ -31,6 +35,7 @@ class PipelineFactory:
             # the other steps might send the request to a LLM for it to be analyzed
             # and without obfuscating the secrets, we'd leak the secrets during those
             # later steps
+            AddMcpTools(),
             CodegateSecrets(),
             CodegatePii(),
             CodegateCli(),
@@ -39,11 +44,13 @@ class PipelineFactory:
                 Config.get_config().prompts.default_chat, Config.get_config().prompts.client_prompts
             ),
         ]
+        print(f"MCP MANAGER: {self.mcp_manager}")
         return SequentialPipelineProcessor(
             input_steps,
             self.secrets_manager,
             client_type,
             is_fim=False,
+            mcp_manager=self.mcp_manager,
         )
 
     def create_fim_pipeline(self, client_type: ClientType) -> SequentialPipelineProcessor:
@@ -65,6 +72,7 @@ class PipelineFactory:
             PiiRedactionNotifier(),
             PiiUnRedactionStep(),
             CodeCommentStep(),
+            FunctionCallCheckStep(),
         ]
         return OutputPipelineProcessor(output_steps)
 

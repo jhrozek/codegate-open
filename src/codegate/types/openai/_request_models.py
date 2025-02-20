@@ -10,6 +10,7 @@ import pydantic
 
 from ._shared_models import ServiceTier
 
+from codegate.types.mcp import Tool as McpTool
 
 class LegacyFunctionDef(pydantic.BaseModel):
     name: str
@@ -374,3 +375,24 @@ class ChatCompletionRequest(pydantic.BaseModel):
             for content in message.get_content():
                 return content.get_text()
         return default
+
+    def add_mcp_tools(self, tools: List[McpTool]):
+        """
+        Add MCP tools to the request by converting them to OpenAI's tool format.
+        
+        Args:
+            tools: List of MCP tools to add
+        """
+        if self.tools is None and len(tools) > 1:
+            self.tools = []
+            
+        for tool in tools:
+            tool_def = ToolDef(
+                type="function",
+                function=FunctionDef(
+                    name=tool.name,
+                    description=tool.description,
+                    parameters=tool.input_schema
+                )
+            )
+            self.tools.append(tool_def)

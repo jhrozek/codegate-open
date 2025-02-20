@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from codegate.clients.clients import ClientType
 from codegate.db.models import Alert, AlertSeverity, Output, Prompt
 from codegate.extract_snippets.message_extractor import CodeSnippet
+from codegate.pipeline.mcp.manager import Manager as McpManager
 from codegate.pipeline.secrets.manager import SecretsManager
 
 
@@ -55,6 +56,7 @@ class PipelineContext:
     bad_packages_found: bool = False
     secrets_found: bool = False
     client: ClientType = ClientType.GENERIC
+    mcp_manager: Optional[McpManager] = None
 
     def add_alert(
         self,
@@ -250,11 +252,13 @@ class InputPipelineInstance:
         secret_manager: SecretsManager,
         is_fim: bool,
         client: ClientType = ClientType.GENERIC,
+        mcp_manager: McpManager = None,
     ):
         self.pipeline_steps = pipeline_steps
         self.secret_manager = secret_manager
+        self.mcp_manager = mcp_manager
         self.is_fim = is_fim
-        self.context = PipelineContext(client=client)
+        self.context = PipelineContext(client=client, mcp_manager=mcp_manager)
 
         # we create the sesitive context here so that it is not shared between individual requests
         # TODO: could we get away with just generating the session ID for an instance?
@@ -319,9 +323,11 @@ class SequentialPipelineProcessor:
         secret_manager: SecretsManager,
         client_type: ClientType,
         is_fim: bool,
+        mcp_manager: McpManager = None,
     ):
         self.pipeline_steps = pipeline_steps
         self.secret_manager = secret_manager
+        self.mcp_manager = mcp_manager
         self.is_fim = is_fim
         self.instance = self._create_instance(client_type)
 
@@ -332,6 +338,7 @@ class SequentialPipelineProcessor:
             self.secret_manager,
             self.is_fim,
             client_type,
+            self.mcp_manager,
         )
 
     async def process_request(

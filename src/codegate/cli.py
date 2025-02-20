@@ -16,6 +16,7 @@ from codegate.codegate_logging import LogFormat, LogLevel, setup_logging
 from codegate.config import Config, ConfigurationError
 from codegate.db.connection import init_db_sync, init_session_if_not_exists
 from codegate.pipeline.factory import PipelineFactory
+from codegate.pipeline.mcp.manager import Manager as McpManager
 from codegate.pipeline.secrets.manager import SecretsManager
 from codegate.providers import crud as provendcrud
 from codegate.providers.copilot.provider import CopilotProvider
@@ -332,13 +333,19 @@ def serve(  # noqa: C901
 
         # Initialize secrets manager and pipeline factory
         secrets_manager = SecretsManager()
-        pipeline_factory = PipelineFactory(secrets_manager)
+
+        print("-----> starting mcp manager")
+        mcp_manager = McpManager()
+
+        pipeline_factory = PipelineFactory(secrets_manager, mcp_manager)
 
         app = init_app(pipeline_factory)
 
         # Set up event loop
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+        loop.run_until_complete(mcp_manager.initialize())
 
         registry = app.provider_registry
         loop.run_until_complete(provendcrud.initialize_provider_endpoints(registry))

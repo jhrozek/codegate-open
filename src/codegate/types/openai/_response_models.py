@@ -4,6 +4,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Union,
 )
 
@@ -124,6 +125,29 @@ class ChoiceDelta(pydantic.BaseModel):
     # TODO: Copilot FIM seems to contain a "text" field only, no delta
     delta: MessageDelta
     logprobs: LogProbs | None = None
+
+    def finished_tool_calls(self) -> bool:
+        return self.finish_reason == "tool_calls"
+
+    def get_tool_calls(self) -> Iterable[Tuple[str, str, str]]:
+        if self.delta.tool_calls:
+            for tool_call in self.delta.tool_calls:
+                if tool_call.function:
+                    yield tool_call.id, tool_call.function.name, tool_call.function.arguments
+
+    def set_tool_calls(self, id, function, arguments) -> None:
+        self.delta.tool_calls = [
+            ToolCall(
+                id=id,
+                type="function",
+                function=FunctionCall(name=function, arguments=arguments),
+            )]
+
+    def set_finish_reason(self, finish_reason: str) -> None:
+        self.finish_reason = finish_reason
+
+    def reset_tool_calls(self) -> None:
+        self.delta.tool_calls = None
 
     def get_text(self) -> str | None:
         if self.delta:

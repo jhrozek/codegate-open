@@ -16,6 +16,7 @@ from codegate.config import Config
 from codegate.pipeline.base import PipelineContext
 from codegate.pipeline.factory import PipelineFactory
 from codegate.pipeline.output import OutputPipelineInstance
+from codegate.pipeline.mcp.manager import Manager as McpManager
 from codegate.pipeline.secrets.manager import SecretsManager
 from codegate.providers.copilot.mapping import PIPELINE_ROUTES, VALIDATED_ROUTES, PipelineType
 from codegate.providers.copilot.pipeline import (
@@ -197,7 +198,9 @@ class CopilotProvider(asyncio.Protocol):
         self.ca = CertificateAuthority.get_instance()
         self.cert_manager = TLSCertDomainManager(self.ca)
         self._closing = False
-        self.pipeline_factory = PipelineFactory(SecretsManager())
+        mcp_manager = McpManager()
+        self.pipeline_factory = PipelineFactory(SecretsManager(), mcp_manager)
+        asyncio.create_task(mcp_manager.initialize())
         self.input_pipeline: Optional[CopilotPipeline] = None
         self.fim_pipeline: Optional[CopilotPipeline] = None
         # the context as provided by the pipeline
