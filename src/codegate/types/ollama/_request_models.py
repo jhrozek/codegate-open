@@ -119,7 +119,7 @@ class ChatRequest(pydantic.BaseModel):
     model: str
     messages: List[Message]
     stream: bool | None = True # see here https://github.com/ollama/ollama/blob/main/server/routes.go#L1529
-    format: dict | None = None
+    format: dict | Literal['json'] | None = None
     keep_alive: int | str | None = None
     tools: List[ToolDef] | None = None
     options: dict | None = None

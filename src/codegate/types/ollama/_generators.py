@@ -28,6 +28,7 @@ async def stream_generator(
                 data = f"{body}\n"
 
                 if os.getenv("CODEGATE_DEBUG_OLLAMA") is not None:
+                    print("---> OLLAMA DEBUG")
                     print(data)
 
                 yield data

@@ -4,7 +4,7 @@ from typing import (
     Any,
     AsyncIterator,
     Optional,
-    Union,
+    Union, Callable,
 )
 
 import httpx
@@ -88,13 +88,16 @@ class OllamaShim(BaseCompletionHandler):
         self,
         stream: AsyncIterator[ChatResponse],
         client_type: ClientType,
+        stream_generator: Callable | None = None,
     ) -> StreamingResponse:
         """
         Create a streaming response from a stream generator. The StreamingResponse
         is the format that FastAPI expects for streaming responses.
         """
         return StreamingResponse(
-            _ollama_dispatcher(stream),
+            stream_generator(stream)
+            if stream_generator
+            else _ollama_dispatcher(stream),
             media_type="application/x-ndjson; charset=utf-8",
             headers={
                 "Cache-Control": "no-cache",

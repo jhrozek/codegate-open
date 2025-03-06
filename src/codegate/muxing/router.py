@@ -1,4 +1,3 @@
-import json
 from typing import Callable, Optional
 
 import structlog
@@ -12,11 +11,18 @@ from codegate.muxing import rulematcher
 from codegate.muxing.adapter import BodyAdapter, ResponseAdapter
 from codegate.providers.fim_analyzer import FIMAnalyzer
 from codegate.providers.registry import ProviderRegistry
+from codegate.types import anthropic, ollama, openai
 from codegate.workspaces.crud import WorkspaceCrud
-from codegate.types import anthropic, openai
 
 from .anthropic_mappers import anthropic_from_openai, anthropic_to_openai
-
+from .ollama_mappers import (
+    ollama_chat_from_openai,
+    ollama_generate_from_openai,
+    ollama_chat_stream_to_openai_stream,
+    ollama_generate_stream_to_openai_stream,
+    openai_chunk_from_ollama_chat,
+    openai_chunk_from_ollama_generate,
+)
 
 logger = structlog.get_logger("codegate")
 
@@ -121,6 +127,15 @@ class MuxRouter:
                 completion_function = anthropic.acompletion
                 from_openai = anthropic_from_openai
                 to_openai = anthropic_to_openai
+            elif ProviderType.ollama == model_route.endpoint.provider_type:
+                if is_fim_request:
+                    completion_function = ollama.generate_streaming
+                    from_openai = ollama_generate_from_openai
+                    to_openai = ollama_generate_stream_to_openai_stream
+                else:
+                    completion_function = ollama.chat_streaming
+                    from_openai = ollama_chat_from_openai
+                    to_openai = ollama_chat_stream_to_openai_stream
 
             response = await provider.process_request(
                 parsed,

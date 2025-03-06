@@ -14,6 +14,10 @@ from ollama import ChatResponse, GenerateResponse
 from codegate.db import models as db_models
 from codegate.muxing import rulematcher
 from codegate.providers.ollama.adapter import OLlamaToModel
+from codegate.types.ollama import StreamingChatCompletion as OllamaStreamingChatCompletion
+from codegate.types.ollama import StreamingGenerateCompletion as OllamaStreamingGenerateCompletion
+from codegate.muxing.ollama_mappers import openai_chunk_from_ollama_chat, openai_chunk_from_ollama_generate
+from codegate.types.openai import StreamingChatCompletion as OpenAIStreamingChatCompletion
 
 logger = structlog.get_logger("codegate")
 
@@ -212,8 +216,8 @@ class ChatStreamChunkFormatter(StreamChunkFormatter):
         """Format the Ollama chunk to OpenAI format."""
         try:
             chunk_dict = json.loads(chunk)
-            ollama_chunk = ChatResponse(**chunk_dict)
-            open_ai_chunk = OLlamaToModel.normalize_chat_chunk(ollama_chunk)
+            ollama_chunk = OllamaStreamingChatCompletion.model_validate(chunk_dict)
+            open_ai_chunk = openai_chunk_from_ollama_chat(ollama_chunk)
             return open_ai_chunk.model_dump_json(exclude_none=True, exclude_unset=True)
         except Exception as e:
             # Sometimes we receive an OpenAI formatted chunk from ollama. Specifically when
@@ -248,10 +252,11 @@ class FimStreamChunkFormatter(StreamChunkFormatter):
         """Format the Ollama chunk to OpenAI format."""
         try:
             chunk_dict = json.loads(chunk)
-            ollama_chunk = GenerateResponse(**chunk_dict)
-            open_ai_chunk = OLlamaToModel.normalize_fim_chunk(ollama_chunk)
-            return json.dumps(open_ai_chunk, separators=(",", ":"), indent=None)
-        except Exception:
+            ollama_chunk = OllamaStreamingGenerateCompletion.model_validate(chunk_dict)
+            open_ai_chunk = openai_chunk_from_ollama_generate(ollama_chunk)
+            return open_ai_chunk.model_dump_json(exclude_none=True, exclude_unset=True)
+        except Exception as e:
+            print("Error formatting Ollama chunk: ", chunk, e)
             return chunk
 
 
