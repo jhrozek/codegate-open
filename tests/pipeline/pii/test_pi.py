@@ -52,6 +52,7 @@ class TestCodegatePii:
     async def test_process_no_messages(self, pii_step):
         request = ChatCompletionRequest(model="test-model", messages=[])
         context = PipelineContext()
+        context.sensitive = PipelineSensitiveData(manager=MagicMock(), session_id="session-id")
 
         result = await pii_step.process(request, context)
 
@@ -89,6 +90,7 @@ class TestPiiUnRedactionStep:
         )
         context = OutputPipelineContext()
         input_context = PipelineContext()
+        input_context.sensitive = PipelineSensitiveData(manager=MagicMock(), session_id="session-id")
 
         result = await unredaction_step.process_chunk(chunk, context, input_context)
 

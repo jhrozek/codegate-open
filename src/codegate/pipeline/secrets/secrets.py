@@ -433,8 +433,8 @@ class SecretUnredactionStep(OutputPipelineStep):
                     raise ValueError("Session ID not found in context")
 
                 original_value = input_context.sensitive.manager.get_original_value(
-                    encrypted_value,
                     input_context.sensitive.session_id,
+                    encrypted_value,
                 )
 
                 if original_value is None:

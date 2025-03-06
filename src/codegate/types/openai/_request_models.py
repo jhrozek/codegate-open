@@ -318,7 +318,7 @@ class ChatCompletionRequest(pydantic.BaseModel):
     store: bool | None = False
     reasoning_effort: Literal["low"] | Literal["medium"] | Literal["high"] | None = None
     metadata: dict | None = None
-    frequency_pentalty: float | None = 0.0
+    frequency_penalty: float | None = 0.0
     logit_bias: dict | None = None
     logprobs: int | None = None
     max_tokens: int | None = None

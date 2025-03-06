@@ -138,9 +138,6 @@ class MuxRouter:
             )
 
             # 4. Transmit the response back to the client in OpenAI format.
-            # return self._response_adapter.format_response_to_client(
-            #     response, model_route.endpoint.provider_type, is_fim_request=is_fim_request
-            # )
             return StreamingResponse(
                 response.body_iterator,
                 status_code=response.status_code,
@@ -151,10 +148,6 @@ class MuxRouter:
 
 
 def default_completion_function(*args, **kwargs):
-    raise NotImplementedError
-
-
-def default_stream_generator(*args, **kwargs):
     raise NotImplementedError
 
 

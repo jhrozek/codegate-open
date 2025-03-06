@@ -289,7 +289,7 @@ class PiiUnRedactionStep(OutputPipelineStep):
                     result.append(text[current_pos:])
                     break
 
-                end_idx = text.find(self.marker_end, start_idx)
+                end_idx = text.find(self.marker_end, start_idx+1)
                 if end_idx == -1:
                     # Incomplete marker, buffer the rest
                     context.prefix_buffer = text[current_pos:]

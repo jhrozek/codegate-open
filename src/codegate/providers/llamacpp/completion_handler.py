@@ -76,7 +76,7 @@ class LlamaCppCompletionHandler(BaseCompletionHandler):
         if is_fim_request:
             request_dict = request.dict(exclude={
                 "best_of",
-                "frequency_pentalty",
+                "frequency_penalty",
                 "n",
                 "stream_options",
                 "user",
@@ -95,7 +95,7 @@ class LlamaCppCompletionHandler(BaseCompletionHandler):
         else:
             request_dict = request.dict(exclude={
                 "audio",
-                "frequency_pentalty",
+                "frequency_penalty",
                 "include_reasoning",
                 "metadata",
                 "max_completion_tokens",
