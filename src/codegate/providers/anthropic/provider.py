@@ -72,6 +72,7 @@ class AnthropicProvider(BaseProvider):
         is_fim_request: bool,
         client_type: ClientType,
         completion_handler: Callable | None = None,
+        stream_generator: Callable | None = None,
     ):
         try:
             stream = await self.complete(
@@ -91,7 +92,9 @@ class AnthropicProvider(BaseProvider):
             else:
                 # just continue raising the exception
                 raise e
-        return self._completion_handler.create_response(stream, client_type)
+        return self._completion_handler.create_response(
+            stream, client_type, stream_generator=stream_generator,
+        )
 
     def _setup_routes(self):
         """

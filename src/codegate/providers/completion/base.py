@@ -1,7 +1,7 @@
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any, AsyncIterator, Optional, Union
+from typing import Any, AsyncIterator, Callable, Optional, Union
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -31,6 +31,7 @@ class BaseCompletionHandler(ABC):
         self,
         stream: AsyncIterator[Any],
         client_type: ClientType = ClientType.GENERIC,
+        stream_generator: Callable | None = None,
     ) -> StreamingResponse:
         pass
 
@@ -42,6 +43,7 @@ class BaseCompletionHandler(ABC):
         self,
         response: Any,
         client_type: ClientType,
+        stream_generator: Callable | None = None,
     ) -> Union[JSONResponse, StreamingResponse]:
         """
         Create a FastAPI response from the completion response.
@@ -51,5 +53,9 @@ class BaseCompletionHandler(ABC):
             or isinstance(response, AsyncIterator)
             or inspect.isasyncgen(response)
         ):
-            return self._create_streaming_response(response, client_type)
+            return self._create_streaming_response(
+                response,
+                client_type,
+                stream_generator=stream_generator,
+            )
         return self._create_json_response(response)

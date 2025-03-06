@@ -160,7 +160,6 @@ class SecretsModifier:
 
         # Convert back to string
         protected_string = "".join(protected_text)
-        print(f"\nProtected text:\n{protected_string}")
         return protected_string, found_secrets
 
 

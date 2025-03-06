@@ -51,13 +51,16 @@ class LiteLLmShim(BaseCompletionHandler):
         self,
         stream: AsyncIterator[Any],
         _: ClientType = ClientType.GENERIC,
+        stream_generator: Callable | None = None,
     ) -> StreamingResponse:
         """
         Create a streaming response from a stream generator. The StreamingResponse
         is the format that FastAPI expects for streaming responses.
         """
         return StreamingResponse(
-            self._stream_generator(stream),
+            stream_generator(stream)
+            if stream_generator
+            else self._stream_generator(stream),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",

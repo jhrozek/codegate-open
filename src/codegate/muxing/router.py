@@ -3,6 +3,7 @@ from typing import Callable, Optional
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from codegate.clients.detector import DetectClient
 from codegate.db.models import ProviderType
@@ -133,15 +134,27 @@ class MuxRouter:
                     completion_function,
                     model,
                 ),
+                stream_generator=openai.stream_generator,
             )
 
             # 4. Transmit the response back to the client in OpenAI format.
-            return self._response_adapter.format_response_to_client(
-                response, model_route.endpoint.provider_type, is_fim_request=is_fim_request
+            # return self._response_adapter.format_response_to_client(
+            #     response, model_route.endpoint.provider_type, is_fim_request=is_fim_request
+            # )
+            return StreamingResponse(
+                response.body_iterator,
+                status_code=response.status_code,
+                headers=response.headers,
+                background=response.background,
+                media_type=response.media_type,
             )
 
 
 def default_completion_function(*args, **kwargs):
+    raise NotImplementedError
+
+
+def default_stream_generator(*args, **kwargs):
     raise NotImplementedError
 
 

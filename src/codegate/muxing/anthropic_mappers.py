@@ -1,4 +1,5 @@
 import json
+import time
 
 from codegate.types import anthropic, openai
 
@@ -256,12 +257,144 @@ def map_system_messages(openai_messages):
 
 
 async def anthropic_to_openai(stream):
+    last_index = -1
+    id = None
+    model = None
+    usage_input = None
+    usage_output = None
+
     async for item in stream:
-        new_item = anthropic_to_openai_inner(item)
-        yield item
+        match item:
+            case anthropic.MessageStart():
+                id = item.message.id
+                model = item.message.model
+                usage_input = item.message.usage.input_tokens if item.message.usage else 0
+                usage_output = item.message.usage.output_tokens if item.message.usage else 0
 
+                yield openai.StreamingChatCompletion(
+                    id=id,
+                    object="chat.completion.chunk",
+                    created=int(time.time()),
+                    choices=[
+                        openai.ChoiceDelta(
+                            index=last_index,
+                            delta=openai.MessageDelta(
+                                role="assistant",
+                                content="",
+                            ),
+                        ),
+                    ],
+                )
 
-def anthropic_to_openai_inner(item):
-    match item:
-        case _:
-            raise ValueError("this should not happen")
+            case anthropic.MessageDelta():
+                if item.usage is not None:
+                    if usage_output is None:
+                        usage_output = item.usage.output_tokens
+                    else:
+                        usage_output = usage_output + item.usage.output_tokens
+
+                yield openai.StreamingChatCompletion(
+                    id=id,
+                    object="chat.completion.chunk",
+                    created=int(time.time()),
+                    choices=[
+                        openai.ChoiceDelta(
+                            index=last_index,
+                            delta=openai.MessageDelta(
+                                role="assistant",
+                                content="",
+                            ),
+                        ),
+                    ],
+                )
+
+            case anthropic.ContentBlockStart():
+                last_index = item.index
+                yield openai.StreamingChatCompletion(
+                    id=id,
+                    object="chat.completion.chunk",
+                    created=int(time.time()),
+                    choices=[
+                        openai.ChoiceDelta(
+                            index=last_index,
+                            delta=openai.MessageDelta(
+                                role="assistant",
+                                content="",
+                            ),
+                        ),
+                    ],
+                )
+
+            case anthropic.ContentBlockDelta():
+                content = None
+                match item.delta:
+                    # Block containing a TEXT delta
+                    case anthropic.TextDelta(text=text):
+                        content = text
+                    # Block containing a JSON delta
+                    case anthropic.InputJsonDelta(partial_json=partial_json):
+                        content = partial_json
+
+                yield openai.StreamingChatCompletion(
+                    id=id,
+                    object="chat.completion.chunk",
+                    created=int(time.time()),
+                    choices=[
+                        openai.ChoiceDelta(
+                            index=last_index,
+                            delta=openai.MessageDelta(
+                                role="assistant",
+                                content=content,
+                            ),
+                        ),
+                    ],
+                )
+
+            case anthropic.ContentBlockStop():
+                # There's no equivalent of content_block_stop for
+                # OpenAI, but this marks the last message before the
+                # index gets updated.
+                continue
+
+            case anthropic.MessageStop():
+                res = openai.StreamingChatCompletion(
+                    id=id,
+                    object="chat.completion.chunk",
+                    created=int(time.time()),
+                    choices=[
+                        openai.ChoiceDelta(
+                            index=last_index,
+                            delta=openai.MessageDelta(),
+                            finish_reason="stop",
+                        ),
+                    ],
+                )
+
+                # Set usage in output message.
+                if usage_input is not None or usage_output is not None:
+                    total_tokens = usage_output if usage_output else 0
+                    total_tokens += usage_input if usage_input else 0
+                    res.usage = openai.Usage(
+                        completion_tokens=usage_output if usage_output else 0,
+                        prompt_tokens=usage_input if usage_input else 0,
+                        total_tokens=total_tokens,
+                    )
+
+                yield res
+
+            case anthropic.MessagePing():
+                # There's no equivalent of ping messages for OpenAI.
+                continue
+
+            # TODO refine the specific error adding code based on the
+            # inner error type.
+            case anthropic.MessageError(error=error):
+                yield openai.MessageError(
+                    error=openai.ErrorDetails(
+                        message=error.message,
+                        code=None,
+                    ),
+                )
+
+            case _:
+                raise ValueError(f"case not covered: {item}")
