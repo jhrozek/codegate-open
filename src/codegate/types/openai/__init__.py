@@ -1,6 +1,7 @@
 from ._generators import (
     completions_streaming,
     message_wrapper,
+    streaming,
     stream_generator,
 )
 

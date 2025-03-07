@@ -14,7 +14,6 @@ from ._response_models import (
     VllmMessageError,
 )
 
-
 logger = structlog.get_logger("codegate")
 
 
@@ -44,7 +43,6 @@ async def stream_generator(stream: AsyncIterator[StreamingChatCompletion]) -> As
         data = err.model_dump_json(exclude_none=True, exclude_unset=True)
         yield f"data: {data}\n\n"
     finally:
-        # Note: I'm not sure this is sent when an error is triggered
         # during SSE processing.
         yield "data: [DONE]\n\n"
 
@@ -55,8 +53,7 @@ async def completions_streaming(request, api_key, base_url):
     async for item in  streaming(request, api_key, f"{base_url}/v1/chat/completions"):
         yield item
 
-
-async def streaming(request, api_key, url):
+async def streaming(request, api_key, url, cls=StreamingChatCompletion):
     headers = {
         "Content-Type": "application/json",
     }
@@ -83,7 +80,7 @@ async def streaming(request, api_key, url):
                     yield ChatCompletion.model_validate_json(body)
                     return
 
-                async for message in message_wrapper(resp.aiter_lines()):
+                async for message in message_wrapper(resp.aiter_lines(), cls):
                     yield message
             case 400 | 401 | 403 | 404 | 413 | 429:
                 text = await resp.aread()
@@ -128,11 +125,11 @@ async def get_data_lines(lines):
     logger.debug(f"Consumed {count} messages", provider="openai", count=count)
 
 
-async def message_wrapper(lines):
+async def message_wrapper(lines, cls = StreamingChatCompletion):
     messages = get_data_lines(lines)
     async for payload in messages:
         try:
-            item = StreamingChatCompletion.model_validate_json(payload)
+            item = cls.model_validate_json(payload)
             yield item
         except Exception as e:
             logger.warn("HTTP error while consuming SSE stream", payload=payload, exc_info=e)

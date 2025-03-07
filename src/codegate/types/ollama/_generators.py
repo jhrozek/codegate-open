@@ -90,6 +90,7 @@ async def get_data_lines(lines):
     logger.debug(f"Consumed {count} messages", provider="anthropic", count=count)
 
 
+# todo: this should have the same signature as message_wrapper in openai
 async def message_wrapper(cls, lines):
     messages = get_data_lines(lines)
     async for payload in messages:

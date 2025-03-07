@@ -125,7 +125,9 @@ class LegacyCompletion(pydantic.BaseModel):
     created: int
     model: str
     system_fingerprint: str | None = None
-    object: Literal["text_completion"] = "text_completion"
+    # OpenRouter uses a strange mix where they send the legacy object almost as in
+    # https://platform.openai.com/docs/api-reference/completions but with chat.completion.chunk
+    object: Literal["text_completion","chat.completion.chunk"] = "text_completion"
     usage: Usage | None = None
 
     def get_content(self) -> Iterable[LegacyMessage]:

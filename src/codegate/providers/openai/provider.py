@@ -9,6 +9,7 @@ from codegate.clients.clients import ClientType
 from codegate.clients.detector import DetectClient
 from codegate.pipeline.factory import PipelineFactory
 from codegate.providers.base import BaseProvider, ModelFetchError
+from codegate.providers.completion import BaseCompletionHandler
 from codegate.providers.fim_analyzer import FIMAnalyzer
 from codegate.providers.litellmshim import LiteLLmShim
 from codegate.types.openai import (
@@ -26,17 +27,19 @@ class OpenAIProvider(BaseProvider):
         self,
         pipeline_factory: PipelineFactory,
         # Enable receiving other completion handlers from childs, i.e. OpenRouter and LM Studio
-        completion_handler: LiteLLmShim = LiteLLmShim(completion_func=completions_streaming, stream_generator=stream_generator),
+        completion_handler: BaseCompletionHandler = None,
     ):
         if self._get_base_url() != "":
             self.base_url = self._get_base_url()
         else:
             self.base_url = "https://api.openai.com/api/v1"
 
-        completion_handler = LiteLLmShim(
-            completion_func=completions_streaming,
-            stream_generator=stream_generator,
-        )
+        if not completion_handler:
+            completion_handler = LiteLLmShim(
+                completion_func=completions_streaming,
+                stream_generator=stream_generator,
+            )
+
         super().__init__(
             None,
             None,

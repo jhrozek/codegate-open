@@ -4,16 +4,39 @@ from codegate.clients.clients import ClientType
 from codegate.clients.detector import DetectClient
 from codegate.pipeline.factory import PipelineFactory
 from codegate.providers.fim_analyzer import FIMAnalyzer
+from codegate.providers.litellmshim import LiteLLmShim
 from codegate.providers.openai import OpenAIProvider
 from codegate.types.openai import (
-        ChatCompletionRequest,
-        LegacyCompletionRequest,
+    ChatCompletion,
+    ChatCompletionRequest,
+    LegacyCompletion,
+    LegacyCompletionRequest,
+    completions_streaming,
+    stream_generator,
+    streaming,
 )
 
 
+async def generate_streaming(request, api_key, base_url):
+    if base_url is None:
+        base_url = "https://api.openai.com"
+
+    url = f"{base_url}/v1/chat/completions"
+    cls = ChatCompletion
+    if isinstance(request, LegacyCompletionRequest):
+        cls = LegacyCompletion
+
+    async for item in streaming(request, api_key, url, cls):
+        yield item
+
 class OpenRouterProvider(OpenAIProvider):
     def __init__(self, pipeline_factory: PipelineFactory):
-        super().__init__(pipeline_factory)
+        completion_handler = LiteLLmShim(
+            completion_func=completions_streaming,
+            fim_completion_func=generate_streaming,
+            stream_generator=stream_generator,
+        )
+        super().__init__(pipeline_factory, completion_handler)
         if self._get_base_url() != "":
             self.base_url = self._get_base_url()
         else:
@@ -59,7 +82,6 @@ class OpenRouterProvider(OpenAIProvider):
 
         @self.router.post(f"/{self.provider_route_name}/api/v1/chat/completions")
         @self.router.post(f"/{self.provider_route_name}/chat/completions")
-        @self.router.post(f"/{self.provider_route_name}/completions")
         @DetectClient()
         async def create_completion(
             request: Request,
