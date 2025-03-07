@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import List
 
@@ -16,7 +15,6 @@ from codegate.types.openai import (
     ChatCompletionRequest,
     LegacyCompletionRequest,
 )
-
 
 logger = structlog.get_logger("codegate")
 
@@ -98,7 +96,6 @@ class LlamaCppProvider(BaseProvider):
             request: Request,
         ):
             body = await request.body()
-            print(body)
             req = LegacyCompletionRequest.model_validate_json(body)
             is_fim_request = FIMAnalyzer.is_fim_request(request.url.path, req)
             return await self.process_request(

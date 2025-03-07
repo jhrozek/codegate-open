@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any, AsyncIterator, Iterator, Optional, Union
+from typing import Any, AsyncIterator, Iterator, Optional, Union, Callable
 
 from fastapi.responses import JSONResponse, StreamingResponse
 from llama_cpp.llama_types import (
@@ -12,7 +12,7 @@ from codegate.config import Config
 from codegate.inference.inference_engine import LlamaCppInferenceEngine
 from codegate.providers.base import BaseCompletionHandler
 from codegate.types.openai import (
-    stream_generator,
+    stream_generator as openai_stream_generator,
     LegacyCompletion,
     StreamingChatCompletion,
 )
@@ -127,13 +127,16 @@ class LlamaCppCompletionHandler(BaseCompletionHandler):
         self,
         stream: AsyncIterator[Any],
         client_type: ClientType = ClientType.GENERIC,
+        stream_generator: Callable | None = None,
     ) -> StreamingResponse:
         """
         Create a streaming response from a stream generator. The StreamingResponse
         is the format that FastAPI expects for streaming responses.
         """
         return StreamingResponse(
-            stream_generator(stream),
+            stream_generator(stream)
+            if stream_generator
+            else openai_stream_generator(stream),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
